@@ -3,6 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Safeguard against UnicodeEncodeError on older Windows terminals
+_stdout_encoding = getattr(sys.stdout, 'encoding', None)
+if _stdout_encoding and hasattr(sys.stdout, 'reconfigure') and _stdout_encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 def print_step(msg):
     print(f"\n🚀 {msg}")
 
@@ -42,8 +47,10 @@ def main():
     print("To start MARK XXX, you must first activate your virtual environment:")
     
     if os.name == 'nt':
-        print("\n  1. Activate the environment:")
-        print("     .\\venv\\Scripts\\activate")
+        print("\n  1. Activate the environment (choose your terminal):")
+        print("     PowerShell:    .\\venv\\Scripts\\Activate.ps1")
+        print("     Command Prompt: .\\venv\\Scripts\\activate.bat")
+        print("     Git Bash:       source venv/Scripts/activate")
         print("\n  2. Run the assistant:")
         print("     python main.py")
     else:

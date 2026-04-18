@@ -1,18 +1,24 @@
-import asyncio
-import websockets.asyncio.client
+try:
+    import websockets.asyncio.client as _ws_client
+except ImportError:
+    try:
+        import websockets.client as _ws_client
+    except ImportError:
+        import websockets as _ws_client
 
 # Fix for websockets timing out on VPNs (default 10s is too short for some proxies)
-_orig_ws_connect = websockets.asyncio.client.connect
+_orig_ws_connect = _ws_client.connect
 def _patched_ws_connect(*args, **kwargs):
     if 'open_timeout' not in kwargs:
         kwargs['open_timeout'] = 60
     return _orig_ws_connect(*args, **kwargs)
-websockets.asyncio.client.connect = _patched_ws_connect
+_ws_client.connect = _patched_ws_connect
 import threading
 import json
 import re
 import sys
-if sys.stdout.encoding.lower() != 'utf-8':
+_stdout_encoding = getattr(sys.stdout, 'encoding', None)
+if _stdout_encoding and hasattr(sys.stdout, 'reconfigure') and _stdout_encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 import traceback
 from pathlib import Path

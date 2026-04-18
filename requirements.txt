@@ -19,3 +19,4 @@ duckduckgo-search
 youtube-transcript-api
 python-socks[asyncio]
 httpx[socks]
+websockets>=14.0
