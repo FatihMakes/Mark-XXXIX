@@ -29,9 +29,28 @@ Designed for speed, autonomy, and real-world usability.
 ## ⚡ Quick Start
 
 ```bash
-git clone github.com/FatihMakes/Mark-XXX.git
-cd mark-xxx
+git clone https://github.com/FatihMakes/Mark-XXX.git
+cd Mark-XXX
+
+# 1. Run the automated setup
 python setup.py
+```
+
+**For Windows (PowerShell):**
+```powershell
+# 2. Activate the virtual environment
+.\venv\Scripts\Activate.ps1
+
+# 3. Start the assistant
+python main.py
+```
+
+**For macOS/Linux:**
+```bash
+# 2. Activate the virtual environment
+source venv/bin/activate
+
+# 3. Start the assistant
 python main.py
 ```
 
