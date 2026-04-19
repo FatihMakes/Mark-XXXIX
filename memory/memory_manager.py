@@ -1,10 +1,3 @@
-"""
-memory_manager.py — JARVIS Long-Term Memory
-============================================
-Memory yalnızca Gemini Live'ın save_memory tool call'ı aracılığıyla güncellenir.
-Ayrı bir Gemini API çağrısı yapılmaz → sıfır 429 hatası.
-"""
-
 import json
 from datetime import datetime
 from threading import Lock
@@ -24,9 +17,6 @@ _lock            = Lock()
 MAX_VALUE_LENGTH = 380
 MEMORY_MAX_CHARS = 2200
 
-
-# ── Şema ──────────────────────────────────────────────────────────────────────
-
 def _empty_memory() -> dict:
     return {
         "identity":      {},
@@ -36,9 +26,6 @@ def _empty_memory() -> dict:
         "wishes":        {},
         "notes":         {},
     }
-
-
-# ── Yükleme ───────────────────────────────────────────────────────────────────
 
 def load_memory() -> dict:
     if not MEMORY_PATH.exists():
@@ -56,9 +43,6 @@ def load_memory() -> dict:
         except Exception as e:
             print(f"[Memory] ⚠️ Load error: {e}")
             return _empty_memory()
-
-
-# ── Boyut sınırı ──────────────────────────────────────────────────────────────
 
 def _all_entries(memory: dict) -> list[tuple]:
     entries = []
@@ -82,9 +66,6 @@ def _trim_to_limit(memory: dict) -> dict:
         del memory[cat][key]
         print(f"[Memory] 🗑️  Trimmed {cat}/{key}")
     return memory
-
-
-# ── Kaydetme ──────────────────────────────────────────────────────────────────
 
 def save_memory(memory: dict) -> None:
     if not isinstance(memory, dict):
@@ -135,9 +116,6 @@ def update_memory(memory_update: dict) -> dict:
         save_memory(memory)
         print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
     return memory
-
-
-# ── Prompt formatı ────────────────────────────────────────────────────────────
 
 def format_memory_for_prompt(memory: dict | None) -> str:
     if not memory:
@@ -214,9 +192,6 @@ def format_memory_for_prompt(memory: dict | None) -> str:
         result = result[:1997] + "…"
 
     return result + "\n"
-
-
-# ── Yardımcı fonksiyonlar ─────────────────────────────────────────────────────
 
 def remember(key: str, value: str, category: str = "notes") -> str:
     valid = {"identity", "preferences", "projects", "relationships", "wishes", "notes"}
