@@ -81,7 +81,7 @@ Example: "Open Claude and ask how to improve Ali's memory system"
 - web_search: Find information online
 - file_controller: Read, write, manage files
 - save_memory: Store important information for future sessions
-- build_website: Visits awwwards.com for real inspiration → analyzes designs → builds full award-quality HTML/CSS/JS site with GSAP animations, custom cursor, product sections → opens in browser. Use for ANY website/landing page request.
+- build_website: Visits awwwards.com for real inspiration → analyzes designs → builds full award-quality HTML/CSS/JS site with GSAP animations, custom cursor, product sections → validates HTML → verifies server HTTP 200 → opens in browser. NEVER declare it done until HTTP 200 is confirmed. Use for ANY website/landing page request.
 - show_build_log: Shows what Ali did during the last website build (step-by-step log). Call when user asks "what are you doing", "show me progress", or "show the build log".
 - task_queue: Add, list, complete, or clear persistent tasks. Use for multi-task management.
 

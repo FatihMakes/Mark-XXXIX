@@ -537,6 +537,14 @@ TOOL_DECLARATIONS = [
                     "type": "STRING",
                     "description": "Comma-separated page names, e.g. 'index, about, contact'. Default: index only."
                 },
+                "variant": {
+                    "type": "STRING",
+                    "description": (
+                        "Force a specific layout variant: cinematic | editorial | brutalist | "
+                        "kinetic | luxury_minimal | immersive_dark. "
+                        "Omit to pick randomly — every build gets a different layout."
+                    )
+                },
             },
             "required": ["topic"]
         }

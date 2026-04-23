@@ -1,29 +1,237 @@
 """
-Website Builder — Award-quality websites inspired by Awwwards.com
+Website Builder — Award-quality, topic-specific websites
 
 Pipeline:
-  1. Open awwwards.com with Playwright (headless), grab winner sites + screenshots
-  2. Feed screenshots to Gemini Vision for design analysis
-  3. Generate full HTML/CSS/JS with GSAP, Three.js, custom cursor, scroll effects
-  4. Serve locally + open in browser
-  5. Write a live progress log so user can ask "what are you doing?"
+  1. Classify the topic → pick real industry-leading reference sites
+  2. Visit 3-4 sites with Playwright, take full screenshots of each
+  3. Gemini Vision analyzes ALL screenshots — extracts layout, colour, animations
+  4. Gemini fuses concepts from multiple sites into one unique brief
+  5. Generate complete HTML/CSS/JS (GSAP, Three.js where appropriate)
+  6. Validate, serve locally, verify HTTP 200, open in browser
 """
 
 from __future__ import annotations
-import asyncio
-import base64
-import io
-import json
-import os
-import re
-import socket
-import subprocess
-import sys
-import threading
-import time
+import asyncio, base64, io, json, os, random, re, socket, subprocess
+import sys, threading, time
 from datetime import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+
+
+# ── Layout Variants — each is a fundamentally different design approach ────────
+# One is picked randomly per build so every site looks genuinely different.
+LAYOUT_VARIANTS = [
+    {
+        "id": "cinematic",
+        "name": "Cinematic Full-Bleed",
+        "hero": (
+            "100vh full-bleed dark hero. A large CSS-drawn abstract shape (circle, arc, or "
+            "diagonal slash) fills most of the background. Headline floats center in massive "
+            "white/off-white serif — minimum 12vw. A single short line of copy below. "
+            "NO button border box — just a text link with an arrow that slides right on hover."
+        ),
+        "layout": (
+            "1. HERO (full-bleed cinematic as above)\n"
+            "2. HORIZONTAL SCROLL section — GSAP pinned, cards slide left on scroll\n"
+            "3. FULL-WIDTH quote/manifesto — single sentence, huge italic serif, centered\n"
+            "4. ALTERNATING rows — image left/text right, then text left/image right (CSS shapes as images)\n"
+            "5. CONTACT — just email address in giant monospace font, no form\n"
+            "6. FOOTER — single line, tiny text, left/right columns"
+        ),
+        "special": "GSAP ScrollTrigger horizontal pin, parallax on background shapes, text reveal clip-path",
+        "no_generic": "NO standard card grid. NO features checklist. NO pricing table.",
+    },
+    {
+        "id": "editorial",
+        "name": "Editorial Magazine",
+        "hero": (
+            "Split 50/50 layout. LEFT half: background color (from palette), huge vertical "
+            "serif headline running top-to-bottom, a thin rule line. RIGHT half: a large CSS "
+            "gradient rectangle simulating a photograph, with a small caption text. "
+            "Nav is completely minimal — just the brand name left, one CTA right."
+        ),
+        "layout": (
+            "1. HERO (split as above — no full-bleed, just two columns)\n"
+            "2. EDITORIAL GRID — 3 col CSS grid, spans different sizes, like a magazine spread\n"
+            "3. PULL QUOTE — full width, italic serif, 5vw size, colored background band\n"
+            "4. SCROLLING MARQUEE — brand name or slogan repeating left-to-right continuously\n"
+            "5. CONTENT COLUMNS — 2 col, image left, text right with index numbers\n"
+            "6. FOOTER — newspaper style, 4 columns, thin rules between them"
+        ),
+        "special": "CSS marquee animation, editorial typography hierarchy, no rounded corners anywhere",
+        "no_generic": "NO hero button. NO feature cards with icons. NO glassmorphism.",
+    },
+    {
+        "id": "brutalist",
+        "name": "Neo-Brutalist",
+        "hero": (
+            "Black background OR stark white. Typography is the hero — the brand name in "
+            "a massive display font (Bebas Neue or similar) at 20-25vw, uppercase, possibly "
+            "overlapping the nav. A blinking cursor character _ after the tagline. "
+            "Borders are thick (3-4px), visible, raw."
+        ),
+        "layout": (
+            "1. HERO (brutal typography as above)\n"
+            "2. NUMBERED LIST section — items like '01 / 02 / 03' with thick top borders\n"
+            "3. ASYMMETRIC — oversized number left (10vw), text right, offset by 30%\n"
+            "4. GALLERY — tight grid with thick gaps, images are CSS color blocks + text overlay\n"
+            "5. MANIFESTO — bold text, every sentence on its own line, staggered left indent\n"
+            "6. FOOTER — plain, monospace font, raw links, thick top border"
+        ),
+        "special": "Blinking cursor CSS animation, text scramble on hover (JS), thick borders, zero gradients",
+        "no_generic": "NO soft shadows. NO rounded corners. NO background gradients. NO glassmorphism.",
+    },
+    {
+        "id": "kinetic",
+        "name": "Kinetic Scroll Story",
+        "hero": (
+            "Almost empty screen — just the headline text, which is SPLIT into individual "
+            "words or letters that GSAP assembles from random positions as the page loads. "
+            "Background is pure black or deep color. As user scrolls, the hero text "
+            "transforms/morphs into the next section's headline."
+        ),
+        "layout": (
+            "1. HERO (kinetic assembly animation)\n"
+            "2. STICKY SCROLL — section is pinned for 300vh, content changes as user scrolls:\n"
+            "   - Each scroll increment reveals a new fact/product with GSAP\n"
+            "3. COUNTER SECTION — animated numbers count up when scrolled into view\n"
+            "4. FULL-SCREEN VIDEO-STYLE — CSS gradient animation simulating video background\n"
+            "5. TESTIMONIAL — single quote that types itself character by character\n"
+            "6. FOOTER — radically minimal, just copyright and two links"
+        ),
+        "special": "GSAP letter-by-letter reveal, ScrollTrigger pin with 300vh scroll, number counter, typing effect",
+        "no_generic": "NO feature grid. NO card layout. Structure is purely scroll-driven storytelling.",
+    },
+    {
+        "id": "luxury_minimal",
+        "name": "Luxury Minimal",
+        "hero": (
+            "Cream/off-white (#faf8f4) background. Extremely refined. The headline is in a "
+            "high-end serif at 6-8vw, NOT centered — aligned left with a 10% left margin. "
+            "A thin vertical rule line on the left. Nav is invisible until scroll. "
+            "One image (CSS shape) positioned absolutely, slightly off-screen right, overlapping the fold."
+        ),
+        "layout": (
+            "1. HERO (refined left-aligned as above)\n"
+            "2. PRODUCT ROW — 4 items in a horizontal line, each with tiny image placeholder, "
+            "   name in small caps, thin rule below\n"
+            "3. FULL-WIDTH IMAGE — dark CSS gradient block taking full width, white text inside\n"
+            "4. TEXT-HEAVY section — two columns of body copy, drop cap on first letter\n"
+            "5. SINGLE CTA — just one sentence and an underline-link, centered, lots of space\n"
+            "6. FOOTER — two lines only, centered, brand name and copyright"
+        ),
+        "special": "Drop cap CSS, mix-blend-mode multiply on image overlaps, text fade-in on scroll, hairline borders",
+        "no_generic": "NO bold accent colors. NO gradients. NO feature icons. Maximum whitespace.",
+    },
+    {
+        "id": "immersive_dark",
+        "name": "Immersive Dark Experience",
+        "hero": (
+            "Pure black. Animated gradient orbs (CSS radial-gradient + keyframe animation) "
+            "drifting slowly in background. Large text with a gradient fill "
+            "(linear-gradient text clip). Custom animated cursor that changes color as it "
+            "moves over different sections. Subtle particle-like dots (JS canvas or CSS)."
+        ),
+        "layout": (
+            "1. HERO (orbs + gradient text as above)\n"
+            "2. GLASS CARDS section — backdrop-filter blur cards floating over dark bg, "
+            "   each with gradient border (border-image)\n"
+            "3. SPOTLIGHT section — mouse position controls a spotlight effect on content\n"
+            "4. STATS row — 4 large numbers with labels, animated count-up\n"
+            "5. DARK CTA — full-width section, gradient button, text glow on hover\n"
+            "6. FOOTER — dark, social icons only (SVG inline), brand mark centered"
+        ),
+        "special": "CSS orb animation, gradient text clip, JS mouse spotlight, animated gradient border, canvas particles",
+        "no_generic": "NOT a standard dark mode site. The darkness is the visual experience itself.",
+    },
+]
+
+
+# ── Industry reference sites ───────────────────────────────────────────────────
+# For each category, 4 sites are visited so Gemini can fuse their design DNA.
+INDUSTRY_REFS = {
+    "car": [
+        "https://www.ferrari.com/en-EN",
+        "https://www.lamborghini.com/en-en",
+        "https://www.bentleymotors.com/en",
+        "https://www.rolls-roycemotorcars.com/en_GB/home.html",
+    ],
+    "clothing": [
+        "https://www.gucci.com",
+        "https://www.zara.com/us",
+        "https://us.louisvuitton.com/eng-us/homepage",
+        "https://www.bottegaveneta.com/en-us",
+    ],
+    "watch": [
+        "https://www.rolex.com",
+        "https://www.audemarspiguet.com/en",
+        "https://www.patek.com/en/home",
+        "https://www.iwc.com/en",
+    ],
+    "jewelry": [
+        "https://www.tiffany.com",
+        "https://www.cartier.com/en-us",
+        "https://www.bulgari.com/en-us",
+        "https://www.vancleefarpels.com/us/en/home.html",
+    ],
+    "hotel": [
+        "https://www.aman.com",
+        "https://www.fourseasons.com",
+        "https://www.belmond.com",
+        "https://www.rosewoodhotels.com",
+    ],
+    "food": [
+        "https://www.noma.dk",
+        "https://restaurant-guy-savoy.com/en",
+        "https://www.alain-ducasse.com/en",
+        "https://www.eleven-madison-park.com",
+    ],
+    "tech": [
+        "https://linear.app",
+        "https://vercel.com",
+        "https://stripe.com",
+        "https://www.notion.so",
+    ],
+    "portfolio": [
+        "https://www.awwwards.com/websites/portfolio/",
+        "https://dribbble.com/shots/popular",
+        "https://www.awwwards.com/websites/",
+        "https://www.behance.net/galleries/graphic-design",
+    ],
+    "agency": [
+        "https://www.activetheory.net",
+        "https://www.hellomonday.com",
+        "https://www.resn.co.nz",
+        "https://www.awwwards.com/websites/agency/",
+    ],
+    "default": [
+        "https://www.awwwards.com/websites/",
+        "https://www.awwwards.com/",
+        "https://dribbble.com/shots/popular",
+        "https://www.behance.net/galleries",
+    ],
+}
+
+# Keyword → category mapping
+CATEGORY_KEYWORDS = {
+    "car":       ["car", "auto", "vehicle", "ferrari", "lamborghini", "porsche", "bmw", "mercedes", "automotive"],
+    "clothing":  ["cloth", "fashion", "wear", "apparel", "dress", "shirt", "brand", "gucci", "zara", "outfit", "collection"],
+    "watch":     ["watch", "timepiece", "rolex", "clock", "chronograph", "horology"],
+    "jewelry":   ["jewel", "ring", "necklace", "diamond", "gold", "bracelet", "tiffany", "cartier"],
+    "hotel":     ["hotel", "resort", "stay", "lodge", "villa", "hospitality", "travel", "retreat"],
+    "food":      ["food", "restaurant", "dining", "chef", "cuisine", "menu", "cafe", "bakery"],
+    "tech":      ["tech", "saas", "app", "software", "startup", "platform", "tool", "dashboard", "ai"],
+    "portfolio": ["portfolio", "designer", "photographer", "artist", "creative", "freelance"],
+    "agency":    ["agency", "studio", "digital", "creative agency", "web agency"],
+}
+
+
+def _classify_topic(topic: str) -> str:
+    t = topic.lower()
+    for cat, keywords in CATEGORY_KEYWORDS.items():
+        if any(k in t for k in keywords):
+            return cat
+    return "default"
 
 
 # ── Progress Logger ────────────────────────────────────────────────────────────
@@ -32,7 +240,7 @@ class BuildLog:
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(f"[{_ts()}] Ali is starting the website build...\n", encoding="utf-8")
+        self.path.write_text(f"[{_ts()}] Ali starting website build...\n", encoding="utf-8")
 
     def add(self, msg: str):
         line = f"[{_ts()}] {msg}\n"
@@ -65,18 +273,31 @@ def _find_free_port(start=8500, end=8600):
 
 
 def _serve(directory: str, port: int):
-    orig = os.getcwd()
-    os.chdir(directory)
+    dir_str = str(directory)
 
-    class QuietHandler(SimpleHTTPRequestHandler):
+    class FixedDirHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=dir_str, **kwargs)
         def log_message(self, *a):
             pass
 
-    server = HTTPServer(("", port), QuietHandler)
+    server = HTTPServer(("", port), FixedDirHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
-    os.chdir(orig)
     return server
+
+
+def _verify_server(url: str, retries: int = 10, delay: float = 0.4) -> bool:
+    import urllib.request
+    for _ in range(retries):
+        try:
+            with urllib.request.urlopen(url, timeout=3) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(delay)
+    return False
 
 
 def _open_browser(url: str):
@@ -86,287 +307,268 @@ def _open_browser(url: str):
         pass
 
 
-def _img_to_b64(img_bytes: bytes) -> str:
-    return base64.b64encode(img_bytes).decode()
+def _validate_html(html: str) -> list[str]:
+    issues = []
+    low = html.lower()
+    if "<!doctype html" not in low and "<html" not in low:
+        issues.append("missing DOCTYPE/html")
+    if "</body>" not in low:
+        issues.append("missing </body>")
+    if len(html) < 3000:
+        issues.append(f"too short ({len(html)} chars)")
+    return issues
 
 
-# ── Awwwards Scraper ───────────────────────────────────────────────────────────
+# ── Multi-site Scraper ─────────────────────────────────────────────────────────
 
-async def _scrape_awwwards(log: BuildLog) -> list[dict]:
-    """
-    Visit awwwards.com with Playwright, grab site names, URLs, descriptions,
-    and screenshots of 3-4 winner/SOTD pages.
-    Returns list of {name, url, description, screenshot_b64}
-    """
+async def _screenshot_sites(urls: list[str], log: BuildLog) -> list[dict]:
+    """Visit each URL with Playwright, take a full-page screenshot."""
     results = []
     try:
         from playwright.async_api import async_playwright
-
-        log.add("Opening awwwards.com (headless browser)...")
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
-            ctx     = await browser.new_context(
+            ctx = await browser.new_context(
                 viewport={"width": 1440, "height": 900},
                 user_agent=(
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/124.0.0.0 Safari/537.36"
-                )
+                ),
             )
-            page = await ctx.new_page()
 
-            # ── 1. Awwwards SOTD page ──
-            try:
-                await page.goto("https://www.awwwards.com/websites/", timeout=20000)
-                await page.wait_for_load_state("domcontentloaded", timeout=15000)
-                await asyncio.sleep(2)
+            for url in urls:
+                try:
+                    log.add(f"  📸 Visiting: {url}")
+                    page = await ctx.new_page()
+                    await page.goto(url, timeout=18000, wait_until="domcontentloaded")
+                    await asyncio.sleep(2.5)
 
-                # Screenshot the gallery page
-                shot = await page.screenshot(full_page=False)
-                log.add("Captured awwwards.com gallery screenshot")
-
-                # Extract site cards
-                cards = await page.query_selector_all("figure.js-item-figure, li.js-item-figure, article")
-                log.add(f"Found {len(cards)} site cards on awwwards")
-
-                for card in cards[:6]:
-                    try:
-                        title_el = await card.query_selector("h2, h3, .title, [class*='title']")
-                        name = (await title_el.inner_text()).strip() if title_el else "Unknown"
-
-                        link_el = await card.query_selector("a[href]")
-                        href = await link_el.get_attribute("href") if link_el else ""
-                        if href and not href.startswith("http"):
-                            href = "https://www.awwwards.com" + href
-
-                        desc_el = await card.query_selector("p, .description, [class*='desc']")
-                        desc = (await desc_el.inner_text()).strip()[:200] if desc_el else ""
-
-                        results.append({"name": name, "url": href, "description": desc, "screenshot_b64": None})
-                        log.add(f"  → Site: {name}")
-                    except Exception:
-                        continue
-
-                # Screenshot one actual winner site for design analysis
-                if results:
-                    winner_url = results[0].get("url", "")
-                    if winner_url and "awwwards.com" in winner_url:
+                    # Dismiss cookie banners
+                    for sel in ["[id*='cookie'] button", "[class*='cookie'] button",
+                                "[id*='accept']", "[class*='accept']", "button:has-text('Accept')",
+                                "button:has-text('I agree')"]:
                         try:
-                            await page.goto(winner_url, timeout=15000)
-                            await page.wait_for_load_state("domcontentloaded", timeout=10000)
-                            await asyncio.sleep(1.5)
-                            detail_shot = await page.screenshot(full_page=False)
-                            results[0]["screenshot_b64"] = _img_to_b64(detail_shot)
-                            log.add(f"Captured detail screenshot of: {results[0]['name']}")
+                            btn = await page.query_selector(sel)
+                            if btn:
+                                await btn.click()
+                                await asyncio.sleep(0.5)
+                                break
                         except Exception:
                             pass
 
-            except Exception as e:
-                log.add(f"Awwwards gallery scrape error: {e} — using SOTD fallback")
+                    shot = await page.screenshot(full_page=False, type="jpeg", quality=80)
+                    b64  = base64.b64encode(shot).decode()
 
-            # ── 2. Also grab SOTD ──
-            try:
-                await page.goto("https://www.awwwards.com/", timeout=15000)
-                await page.wait_for_load_state("domcontentloaded", timeout=10000)
-                await asyncio.sleep(1.5)
+                    # Get page title
+                    title = await page.title()
+                    results.append({"url": url, "title": title, "screenshot_b64": b64})
+                    log.add(f"  ✅ Captured: {title[:60]}")
+                    await page.close()
 
-                sotd_shot = await page.screenshot(full_page=False)
-                log.add("Captured awwwards.com homepage screenshot")
-
-                # Get the SOTD title
-                sotd_el = await page.query_selector("h1, h2, .site-name, [class*='winner']")
-                sotd_name = (await sotd_el.inner_text()).strip() if sotd_el else "SOTD"
-                results.insert(0, {
-                    "name": f"SOTD: {sotd_name}",
-                    "url": "https://www.awwwards.com",
-                    "description": "Site of the Day from Awwwards — highest quality web design",
-                    "screenshot_b64": _img_to_b64(sotd_shot),
-                })
-                log.add(f"Got Site of the Day: {sotd_name}")
-            except Exception as e:
-                log.add(f"SOTD grab error: {e}")
+                except Exception as e:
+                    log.add(f"  ⚠️  Failed to capture {url}: {e}")
+                    continue
 
             await browser.close()
-
     except Exception as e:
-        log.add(f"Browser scrape failed: {e} — continuing with text-based inspiration")
+        log.add(f"Browser session error: {e}")
 
-    # Fallback: curated design reference data
-    if not results:
-        log.add("Using curated design reference library (awwwards-inspired)")
-        results = [
-            {
-                "name": "Apple.com", "url": "https://apple.com",
-                "description": "Ultra-clean minimalism. Massive typography, full-bleed product photography, subtle scroll animations, monochromatic with accent highlights.",
-                "screenshot_b64": None
-            },
-            {
-                "name": "Linear.app", "url": "https://linear.app",
-                "description": "Dark premium SaaS. Gradient glows, smooth hover states, glassmorphism cards, animated noise texture backgrounds.",
-                "screenshot_b64": None
-            },
-            {
-                "name": "Stripe.com", "url": "https://stripe.com",
-                "description": "Colourful gradients, 3D tilt effects, crisp sans-serif, layered depth, animated gradient blobs.",
-                "screenshot_b64": None
-            },
-        ]
+    log.add(f"Screenshots collected: {len(results)}/{len(urls)}")
     return results
 
 
-# ── Gemini Vision Analysis ─────────────────────────────────────────────────────
+# ── Gemini Vision — Design Fusion ──────────────────────────────────────────────
 
-def _analyze_with_gemini(sites: list[dict], topic: str, style: str, api_key: str, log: BuildLog) -> str:
-    """Use Gemini to analyze screenshots and extract design patterns."""
+def _fuse_designs(screenshots: list[dict], topic: str, style: str, category: str, api_key: str, log: BuildLog) -> str:
+    """
+    Send all screenshots to Gemini Vision.
+    Ask it to identify what makes each site special, then fuse the best
+    elements from all of them into a unique design brief.
+    """
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-
-        # Build parts for the analysis request
-        parts = []
-        parts.append(
-            f"You are an expert web designer analyzing Awwwards-winning websites.\n"
-            f"I'm building a website for: {topic} (style: {style})\n\n"
-            f"Here are {len(sites)} reference sites from Awwwards:\n"
-        )
-
-        screenshots_sent = 0
-        for site in sites[:3]:
-            parts.append(f"\n**{site['name']}**: {site['description']}")
-            if site.get("screenshot_b64") and screenshots_sent < 2:
-                parts.append({
-                    "mime_type": "image/png",
-                    "data": base64.b64decode(site["screenshot_b64"])
-                })
-                screenshots_sent += 1
-
-        parts.append(
-            f"\n\nAnalyze these and provide a DETAILED design brief for my {topic} website:\n"
-            "1. COLOUR PALETTE (exact hex codes — 5-6 colours)\n"
-            "2. TYPOGRAPHY (Google Font choices, sizes, weights)\n"
-            "3. KEY ANIMATIONS (list 5-8 specific animations to implement)\n"
-            "4. LAYOUT PATTERNS (hero, sections, product grid, footer)\n"
-            "5. SPECIAL EFFECTS (cursor, parallax, noise texture, gradients)\n"
-            "6. PRODUCT SECTION design (even if no products provided — create luxury placeholders)\n"
-            "Be SPECIFIC and DETAILED. This design brief will be used to generate actual code."
-        )
-
         model = genai.GenerativeModel("gemini-2.5-flash")
-        # Send text-only if vision fails
-        try:
-            content_parts = []
-            for p in parts:
-                if isinstance(p, str):
-                    content_parts.append(p)
-                elif isinstance(p, dict):
-                    from google.generativeai.types import BlobDict
-                    content_parts.append({"inline_data": p})
 
-            response = model.generate_content(content_parts, request_options={"timeout": 60})
-        except Exception:
-            text_only = "\n".join(p for p in parts if isinstance(p, str))
-            response = model.generate_content(text_only, request_options={"timeout": 60})
+        content_parts = []
 
+        intro = (
+            f"You are an award-winning creative director. I've screenshotted {len(screenshots)} "
+            f"industry-leading {category} websites.\n"
+            f"I need to build a website for: **{topic}** (style: {style})\n\n"
+            f"STEP 1 — Analyze each screenshot and identify:\n"
+            f"- What makes it visually unique (NOT generic)\n"
+            f"- Its hero layout approach\n"
+            f"- Color palette and typography choices\n"
+            f"- Specific animations or interactions\n"
+            f"- One standout design decision worth borrowing\n\n"
+            f"STEP 2 — Fuse the BEST elements from all sites:\n"
+            f"- Pick the most striking hero layout from site X\n"
+            f"- The color palette from site Y\n"
+            f"- The product/content presentation from site Z\n"
+            f"- The footer/nav from whichever is most elegant\n\n"
+            f"STEP 3 — Output a SPECIFIC design brief:\n"
+            f"1. COLOR PALETTE (5-6 exact hex codes + usage)\n"
+            f"2. TYPOGRAPHY (Google Font names, exact sizes, weights)\n"
+            f"3. HERO (exact layout — full-bleed image? split? kinetic text? 3D?)\n"
+            f"4. ANIMATION LIST (8-10 specific GSAP/CSS animations)\n"
+            f"5. LAYOUT STRUCTURE (section order and layout for each)\n"
+            f"6. CONTENT SECTIONS (with example copy for {topic})\n"
+            f"7. SPECIAL EFFECTS (cursor, parallax, scroll triggers, noise)\n"
+            f"8. WHAT MAKES THIS UNIQUE (the one big idea that sets it apart)\n"
+        )
+        content_parts.append(intro)
+
+        shots_sent = 0
+        for i, site in enumerate(screenshots[:4]):
+            content_parts.append(f"\n---\n**Site {i+1}: {site['title']} ({site['url']})**")
+            if site.get("screenshot_b64") and shots_sent < 4:
+                try:
+                    img_bytes = base64.b64decode(site["screenshot_b64"])
+                    content_parts.append({"mime_type": "image/jpeg", "data": img_bytes})
+                    shots_sent += 1
+                except Exception:
+                    pass
+
+        log.add(f"Sending {shots_sent} screenshots to Gemini Vision for design fusion...")
+        response = model.generate_content(content_parts, request_options={"timeout": 90})
         brief = response.text.strip()
-        log.add(f"Design brief generated ({len(brief)} chars)")
+        log.add(f"Design fusion brief: {len(brief)} chars")
         return brief
 
     except Exception as e:
-        log.add(f"Vision analysis error: {e} — using default brief")
-        return (
-            f"Design brief for {topic} ({style}):\n"
-            "COLOURS: #0a0a0f (bg), #f5f5f0 (text), #c8a96e (gold accent), #1a1a2e (deep navy)\n"
-            "TYPOGRAPHY: Playfair Display (headings), Inter (body), huge 10-20vw hero text\n"
-            "ANIMATIONS: GSAP scroll reveal, magnetic cursor, parallax layers, text scramble, smooth page transitions\n"
-            "LAYOUT: Full-bleed hero, horizontal product scroll, alternating feature rows, editorial grid\n"
-            "EFFECTS: Custom magnetic cursor, grain texture overlay, gradient glow orbs, clip-path reveals\n"
-            "PRODUCTS: Luxury product cards with hover 3D tilt, name/price/material details"
-        )
+        log.add(f"Vision fusion error: {e} — using text-based brief")
+        return _text_brief(topic, style, category)
+
+
+def _text_brief(topic: str, style: str, category: str) -> str:
+    """Fallback brief when vision isn't available — still category-specific."""
+    briefs = {
+        "car": (
+            "Dark carbon-fibre aesthetic. Colours: #08090b, #e8e6e3, #c0392b, #f39c12.\n"
+            "Font: Bebas Neue (headings), Inter (body). Hero: full-bleed car reveal with horizontal scroll.\n"
+            "Animations: speed lines, engine rev sound on hover, particle dust trails.\n"
+            "Products: 3D tilt cards showing car specs. Big idea: the site ACCELERATES as you scroll."
+        ),
+        "clothing": (
+            "Editorial fashion. Colours: #fafaf8, #1a1a1a, #c9a84c, #e8d5b7.\n"
+            "Font: Cormorant Garamond (headings), DM Sans (body). Hero: full-screen lookbook with slow pan.\n"
+            "Animations: fabric sway effect, model reveal, collection slideshow.\n"
+            "Products: editorial grid, hover zooms to detail. Big idea: feels like a print magazine."
+        ),
+        "watch": (
+            "Swiss precision. Colours: #0d0d0d, #f0ede8, #b8922a, #e8e0d0.\n"
+            "Font: Playfair Display (headings), Inter (body). Hero: close-up watch face with ticking second hand.\n"
+            "Animations: watch hands tick, dial zoom, sapphire crystal reflection.\n"
+            "Products: hero spotlight with 360 rotation. Big idea: the watch ticks as you scroll."
+        ),
+        "tech": (
+            "Minimal SaaS. Colours: #000000, #ffffff, #6366f1, #a855f7.\n"
+            "Font: Inter (all), tight tracking. Hero: animated code/dashboard preview.\n"
+            "Animations: gradient shimmer, feature highlights, smooth section transitions.\n"
+            "Products: feature cards with hover glow. Big idea: feels instant and frictionless."
+        ),
+        "hotel": (
+            "Warm luxury. Colours: #f5f0e8, #2c2416, #b5956a, #8b7355.\n"
+            "Font: Canela (headings), Graphik (body). Hero: parallax landscape video.\n"
+            "Animations: slow reveal, room tour on scroll, seasonal transitions.\n"
+            "Products: room cards with full-bleed imagery. Big idea: the site is a destination itself."
+        ),
+        "food": (
+            "Gastronomic. Colours: #1a1209, #f4ede4, #d4a853, #8b4513.\n"
+            "Font: Freight Display (headings), Futura (body). Hero: dish close-up with steam effect.\n"
+            "Animations: plating sequence, ingredient reveal, menu unfold.\n"
+            "Products: tasting menu cards with course descriptions. Big idea: synesthetic — you can almost smell it."
+        ),
+    }
+    return briefs.get(category, (
+        f"Award-winning {style}. Research {topic} industry leaders and borrow their best design decisions.\n"
+        "Use bold typography, purposeful whitespace, smooth GSAP animations, and a custom cursor."
+    ))
 
 
 # ── HTML Generator ─────────────────────────────────────────────────────────────
 
-def _generate_html(topic: str, style: str, pages: list, design_brief: str, api_key: str, log: BuildLog) -> dict[str, str]:
-    """Generate complete, spectacular HTML files using the design brief."""
+def _generate_html(topic: str, style: str, pages: list, brief: str,
+                   category: str, ref_sites: list[dict], api_key: str,
+                   log: BuildLog, variant: dict) -> dict[str, str]:
+    """Ask Gemini to generate complete HTML using a specific layout variant."""
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
 
-        pages_desc = ", ".join(pages)
+        site_names = [s["title"][:40] for s in ref_sites[:4]] if ref_sites else ["industry leaders"]
 
-        prompt = f"""You are an award-winning web developer building a production website.
+        prompt = f"""You are a world-class creative director and front-end developer.
+Build a website for Awwwards.com — it MUST win Site of the Day.
 
 TOPIC: {topic}
+CATEGORY: {category}
 STYLE: {style}
-PAGES TO BUILD: {pages_desc}
+INSPIRED BY: {', '.join(site_names)}
 
-DESIGN BRIEF (from Awwwards analysis):
-{design_brief}
+━━━ CHOSEN LAYOUT: {variant["name"].upper()} ━━━
+You MUST build the {variant["name"]} layout. This is non-negotiable.
 
-━━━ BUILD REQUIREMENTS ━━━
+HERO DESIGN (build exactly this):
+{variant["hero"]}
 
-TECHNOLOGY (you MUST use these):
-- GSAP 3.x via CDN (https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js)
-- GSAP ScrollTrigger via CDN
-- Google Fonts via @import
-- Vanilla JS for all interactivity (no jQuery, no Vue, no React)
-- CSS custom properties (variables) for theming
-- CSS Grid + Flexbox layouts
+SECTION STRUCTURE (follow this order exactly):
+{variant["layout"]}
 
-MANDATORY FEATURES:
-1. Custom animated cursor (magnetic effect on buttons/links)
-2. Smooth scroll (CSS scroll-behavior + JS scroll handling)
-3. Hero section with animated text (GSAP or CSS keyframes) — HUGE typography (8-15vw)
-4. Scroll-triggered reveal animations (GSAP ScrollTrigger or IntersectionObserver)
-5. Product/service section — create beautiful placeholder items if none provided
-   Each product: high-quality CSS-drawn shape or SVG + name + description + price
-6. Gradient noise texture overlay (CSS SVG filter or radial gradients)
-7. Navigation with blur backdrop + smooth hide/show on scroll
-8. Footer with links, copyright, social icons (SVG inline)
-9. Mobile responsive (CSS clamp(), fluid typography)
-10. Loading screen (brief, then dissolves away)
+SPECIAL TECHNIQUES (implement ALL of these):
+{variant["special"]}
 
-PERFORMANCE:
-- All CSS inline in <style>
-- All JS inline in <script> at bottom
-- External CDN only for GSAP (2 script tags max)
-- Google Fonts via @import inside <style>
+WHAT TO AVOID:
+{variant["no_generic"]}
 
-DESIGN QUALITY:
-- DO NOT build a generic/template website
-- Use the exact colours and fonts from the design brief
-- Make it feel like an Awwwards winner — bold, unexpected, premium
-- Spacing should be generous (100px+ between sections)
-- Use clip-path, mix-blend-mode, backdrop-filter for depth
-- Horizontal rules and decorative elements should feel editorial
+━━━ DESIGN BRIEF FROM REAL {category.upper()} WEBSITES ━━━
+{brief}
 
-OUTPUT FORMAT:
-For each page, output EXACTLY this JSON (one per line, valid JSON):
-{{"filename": "index.html", "content": "<COMPLETE HTML — NO TRUNCATION>"}}
+━━━ TECHNICAL REQUIREMENTS ━━━
+CDN scripts allowed:
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+Google Fonts via @import inside <style>.
+All other CSS inline. All JS inline at bottom. No frameworks.
 
-Critical: output the COMPLETE HTML. Do not say "rest of code here" or truncate.
-Every page must be a fully working, standalone HTML file.
+CUSTOM CURSOR: always include — a small dot + larger ring that lags behind.
+LOADING SCREEN: brief overlay that fades out after 800ms.
+SEO: <title>, <meta description>, <meta property="og:title">, <link rel="canonical">.
+
+CONTENT: Write real, specific copy for {topic}. No "Lorem ipsum". No placeholder text.
+CATEGORY-SPECIFIC CONTENT for {category}:
+  - car: model names, 0-100 times, horsepower, price
+  - clothing: garment names, materials, sizes, seasons
+  - watch: movement type, power reserve, case diameter, collection name
+  - hotel: room names, amenities, location details, rates
+  - food: dish names, ingredients, chef name, tasting menu
+  - tech: feature names, metrics, integration names, pricing tiers
+  - default: invent specific, believable details for {topic}
+
+PAGES: {', '.join(pages)}
+
+OUTPUT: One JSON object per page, nothing else before or after:
+{{"filename": "index.html", "content": "<COMPLETE HTML — NEVER TRUNCATE>"}}
+
+The HTML must be 500+ lines. Complete working code only.
 """
 
-        log.add("Calling Gemini to generate full website code...")
-        log.add("(This may take 30-60 seconds for a complete, high-quality build)")
+        log.add("Calling Gemini to generate unique award-quality HTML...")
+        log.add("(30-90 seconds for a complete, non-generic build)")
 
         response = model.generate_content(
             prompt,
             generation_config={"max_output_tokens": 65536},
-            request_options={"timeout": 180}
+            request_options={"timeout": 200},
         )
         raw = response.text.strip()
-        log.add(f"Gemini returned {len(raw):,} characters of code")
+        log.add(f"Gemini returned {len(raw):,} characters")
 
         # Parse JSON blocks
         files = {}
-        # Try strict JSON blocks first
-        for m in re.finditer(r'\{"filename"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*("(?:[^"\\]|\\.)*"|\'.+?\')', raw, re.DOTALL):
-            pass  # placeholder — use full parse below
-
-        # Full parse: find JSON objects with filename + content
         decoder = json.JSONDecoder()
         idx = 0
         while idx < len(raw):
@@ -375,26 +577,22 @@ Every page must be a fully working, standalone HTML file.
                 obj, end = decoder.raw_decode(raw, brace)
                 if isinstance(obj, dict) and "filename" in obj and "content" in obj:
                     files[obj["filename"]] = obj["content"]
-                    log.add(f"Parsed file: {obj['filename']} ({len(obj['content']):,} chars)")
+                    log.add(f"Parsed: {obj['filename']} ({len(obj['content']):,} chars)")
                 idx = end
             except (ValueError, KeyError):
-                idx = (raw.index('{', idx) + 1) if '{' in raw[idx+1:] else len(raw)
+                nxt = raw.find('{', idx + 1)
+                idx = nxt if nxt > idx else len(raw)
 
-        # Fallback: if the whole response looks like HTML
+        # Fallback: raw response might be HTML directly
         if not files:
-            if raw.strip().startswith("<!DOCTYPE") or raw.strip().startswith("<html"):
+            if raw.strip().lower().startswith("<!doctype") or "<html" in raw[:200].lower():
                 files["index.html"] = raw
                 log.add("Using raw HTML output as index.html")
             else:
-                # Try to extract HTML blocks
-                html_match = re.search(r'(<!DOCTYPE html.*?</html>)', raw, re.DOTALL | re.IGNORECASE)
-                if html_match:
-                    files["index.html"] = html_match.group(1)
+                m = re.search(r'(<!DOCTYPE html.*?</html>)', raw, re.DOTALL | re.IGNORECASE)
+                if m:
+                    files["index.html"] = m.group(1)
                     log.add("Extracted HTML block as index.html")
-
-        if not files:
-            log.add("WARNING: Could not parse output — writing raw response")
-            files["index.html"] = raw
 
         return files
 
@@ -403,130 +601,256 @@ Every page must be a fully working, standalone HTML file.
         return {}
 
 
-# ── Fallback Beautiful Template ────────────────────────────────────────────────
+# ── Category-aware Fallback Template ──────────────────────────────────────────
 
-def _build_fallback(topic: str, style: str) -> str:
-    """Spectacular fallback when Gemini fails — hand-coded award-quality template."""
-    slug = topic.lower().replace(" ", "-")
-    yr   = time.strftime('%Y')
+_CATEGORY_THEMES = {
+    "car": {
+        "bg": "#06080a", "bg2": "#0e1015", "fg": "#e8e6e3",
+        "acc": "#c0392b", "acc2": "#f39c12", "font_head": "Bebas+Neue",
+        "font_body": "Inter", "font_head_css": "'Bebas Neue', sans-serif",
+        "eyebrow": "Performance Redefined",
+        "hero_h1_line1": "Born for the", "hero_h1_line2": "Road",
+        "hero_sub": "Where engineering meets obsession. Every curve calculated. Every second counted.",
+        "cta": "Explore Models",
+        "section1": "The Collection", "section1_sub": "Choose Your Legacy",
+        "section2": "Performance", "section2_sub": "Engineering Excellence",
+    },
+    "clothing": {
+        "bg": "#fafaf8", "bg2": "#f4f0eb", "fg": "#1a1a1a",
+        "acc": "#1a1a1a", "acc2": "#c9a84c", "font_head": "Cormorant+Garamond:wght@300;400;700",
+        "font_body": "DM+Sans", "font_head_css": "'Cormorant Garamond', serif",
+        "eyebrow": "New Season Collection",
+        "hero_h1_line1": "Wear What", "hero_h1_line2": "You Feel",
+        "hero_sub": "Curated pieces for the discerning few. Crafted with intention, worn with confidence.",
+        "cta": "Shop Collection",
+        "section1": "The Edit", "section1_sub": "This Season's Essentials",
+        "section2": "Our Philosophy", "section2_sub": "Conscious Craft",
+    },
+    "watch": {
+        "bg": "#0a0a0a", "bg2": "#111111", "fg": "#f0ede8",
+        "acc": "#b8922a", "acc2": "#e8e0d0", "font_head": "Playfair+Display:wght@400;700;900",
+        "font_body": "Inter", "font_head_css": "'Playfair Display', serif",
+        "eyebrow": "Swiss Precision Since 1875",
+        "hero_h1_line1": "Time is the", "hero_h1_line2": "Ultimate Luxury",
+        "hero_sub": "Every piece measures more than seconds — it measures a life well lived.",
+        "cta": "Explore Timepieces",
+        "section1": "The Collection", "section1_sub": "Masterpieces of Horology",
+        "section2": "The Craft", "section2_sub": "400 Hours of Artisanship",
+    },
+    "hotel": {
+        "bg": "#f5f0e8", "bg2": "#ede8dc", "fg": "#2c2416",
+        "acc": "#b5956a", "acc2": "#8b7355", "font_head": "Libre+Baskerville:wght@400;700",
+        "font_body": "Lato", "font_head_css": "'Libre Baskerville', serif",
+        "eyebrow": "An Escape Beyond Compare",
+        "hero_h1_line1": "Where Silence", "hero_h1_line2": "Speaks",
+        "hero_sub": "A retreat for those who seek not just comfort, but transformation.",
+        "cta": "Reserve Your Stay",
+        "section1": "Our Rooms", "section1_sub": "Intimate Spaces",
+        "section2": "The Experience", "section2_sub": "A Journey for the Senses",
+    },
+    "tech": {
+        "bg": "#000000", "bg2": "#0a0a0f", "fg": "#ffffff",
+        "acc": "#6366f1", "acc2": "#a855f7", "font_head": "Inter:wght@300;400;700;900",
+        "font_body": "Inter", "font_head_css": "'Inter', sans-serif",
+        "eyebrow": "Next Generation Platform",
+        "hero_h1_line1": "Build Faster.", "hero_h1_line2": "Ship Smarter.",
+        "hero_sub": "The platform that collapses the distance between idea and reality.",
+        "cta": "Start Free",
+        "section1": "Features", "section1_sub": "Everything You Need",
+        "section2": "Why Us", "section2_sub": "Built Different",
+    },
+    "food": {
+        "bg": "#1a1209", "bg2": "#231810", "fg": "#f4ede4",
+        "acc": "#d4a853", "acc2": "#8b4513", "font_head": "Playfair+Display:ital,wght@0,400;1,400;0,700",
+        "font_body": "Lato", "font_head_css": "'Playfair Display', serif",
+        "eyebrow": "A Culinary Journey",
+        "hero_h1_line1": "Taste the", "hero_h1_line2": "Season",
+        "hero_sub": "Every dish tells a story. Every ingredient chosen with reverence.",
+        "cta": "Reserve a Table",
+        "section1": "The Menu", "section1_sub": "Seasonal Tasting",
+        "section2": "The Chef", "section2_sub": "Philosophy",
+    },
+}
+
+
+def _build_fallback(topic: str, style: str, category: str) -> str:
+    t = _CATEGORY_THEMES.get(category, {
+        "bg": "#06060a", "bg2": "#0e0e16", "fg": "#f0eef8",
+        "acc": "#bf5fff", "acc2": "#ff2d9b", "font_head": "Playfair+Display:wght@400;700;900",
+        "font_body": "Inter", "font_head_css": "'Playfair Display', serif",
+        "eyebrow": "Premium Experience",
+        "hero_h1_line1": "Welcome to", "hero_h1_line2": topic.title(),
+        "hero_sub": f"A premium {style} experience crafted with precision.",
+        "cta": "Explore",
+        "section1": "Featured", "section1_sub": "Curated Selection",
+        "section2": "About", "section2_sub": "Our Story",
+    })
+
+    yr = time.strftime("%Y")
+    brand = topic.split()[0].upper()
+
+    # Card content by category
+    cards_html = ""
+    card_data = {
+        "car":      [("Veloce S", "0-100 in 2.8s · 720hp", "$285,000"),
+                     ("Corsa GT", "Twin-turbo · 580hp", "$195,000"),
+                     ("Strada R", "AWD · 460hp", "$145,000"),
+                     ("Pista X", "Track edition · 850hp", "$420,000")],
+        "clothing": [("Silk Blazer", "100% Mulberry Silk", "$890"),
+                     ("Tailored Trouser", "Japanese Wool", "$560"),
+                     ("Linen Shirt", "Organic Belgian Linen", "$320"),
+                     ("Cashmere Coat", "Grade A Mongolian", "$1,450")],
+        "watch":    [("Calibre I", "Manual Wind · 72hr reserve", "$12,800"),
+                     ("Perpetual II", "Automatic · Moon phase", "$24,500"),
+                     ("Tourbillon III", "Flying tourbillon", "$87,000"),
+                     ("Sport IV", "Diver 300m · Sapphire", "$9,200")],
+        "hotel":    [("Garden Suite", "80m² · Private terrace", "From $1,200/night"),
+                     ("Pool Villa", "160m² · Infinity pool", "From $3,800/night"),
+                     ("Penthouse", "360m² · Butler service", "From $8,500/night"),
+                     ("Studio Retreat", "45m² · Forest view", "From $620/night")],
+        "food":     [("Amuse-bouche", "Seasonal garden harvest", ""),
+                     ("First Course", "Hand-dived scallop, dashi", ""),
+                     ("Main", "Aged duck, black truffle", ""),
+                     ("Dessert", "Miso caramel, yuzu", "")],
+        "tech":     [("Starter", "Up to 5 users · 10GB", "Free"),
+                     ("Pro", "Unlimited users · 100GB", "$49/mo"),
+                     ("Enterprise", "Custom · SLA", "Contact us"),
+                     ("API", "Full access · 1M req/mo", "$99/mo")],
+    }.get(category, [
+        (f"{topic.split()[0].title()} One", "Signature edition", "$—"),
+        (f"{topic.split()[0].title()} Pro", "Advanced series", "$—"),
+        (f"{topic.split()[0].title()} Elite", "Limited edition", "$—"),
+        (f"{topic.split()[0].title()} Noir", "Black label", "$—"),
+    ])
+
+    for name, detail, price in card_data:
+        price_html = f'<div class="card-price">{price}</div>' if price else ""
+        cards_html += f"""
+      <div class="card reveal">
+        <div class="card-visual"></div>
+        <div class="card-info">
+          <div class="card-name">{name}</div>
+          <div class="card-detail">{detail}</div>
+          {price_html}
+        </div>
+      </div>"""
+
+    text_color = "var(--fg)" if t["bg"] not in ("#fafaf8", "#f5f0e8", "#f4ede4") else "var(--bg)"
+    dark_mode  = t["bg"] not in ("#fafaf8", "#f5f0e8", "#f4ede4")
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{topic.title()} — Premium</title>
-<meta name="description" content="A premium {style} experience for {topic}.">
+<meta name="description" content="Premium {category} experience: {topic}.">
 <meta property="og:title" content="{topic.title()}">
-<meta property="og:description" content="Premium {style} website for {topic}.">
+<meta property="og:description" content="{t['eyebrow']} — {topic.title()}">
 <link rel="canonical" href="https://example.com">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family={t["font_head"]}&family={t["font_body"]}:wght@300;400;500;600&display=swap');
 *,*::before,*::after{{margin:0;padding:0;box-sizing:border-box}}
 :root{{
-  --bg:#060608;--bg2:#0e0e16;--fg:#f0eee8;--acc:#c8a96e;--acc2:#8b5cf6;
-  --dim:rgba(240,238,232,.5);--card:rgba(255,255,255,.04);
-  --border:rgba(200,169,110,.15);--glow:rgba(200,169,110,.25);
+  --bg:{t["bg"]};--bg2:{t["bg2"]};--fg:{t["fg"]};
+  --acc:{t["acc"]};--acc2:{t["acc2"]};
+  --dim:color-mix(in srgb,var(--fg) 55%,transparent);
+  --card:color-mix(in srgb,var(--fg) 4%,transparent);
+  --border:color-mix(in srgb,var(--acc) 20%,transparent);
+  --font-head:{t["font_head_css"]};
+  --font-body:'{t["font_body"]}',sans-serif;
 }}
 html{{scroll-behavior:smooth}}
-body{{font-family:'Inter',sans-serif;background:var(--bg);color:var(--fg);overflow-x:hidden;cursor:none}}
+body{{font-family:var(--font-body);background:var(--bg);color:var(--fg);overflow-x:hidden;cursor:none}}
 
-/* ── Custom Cursor ── */
-#cursor{{position:fixed;width:12px;height:12px;background:var(--acc);border-radius:50%;pointer-events:none;z-index:9999;transition:transform .15s ease,width .2s,height .2s,background .2s;transform:translate(-50%,-50%)}}
-#cursor-ring{{position:fixed;width:40px;height:40px;border:1px solid var(--acc);border-radius:50%;pointer-events:none;z-index:9998;transition:transform .08s linear,width .25s,height .25s,opacity .3s;transform:translate(-50%,-50%);opacity:.6}}
-body:hover #cursor{{opacity:1}}
+/* Cursor */
+#cur{{position:fixed;width:10px;height:10px;background:var(--acc);border-radius:50%;pointer-events:none;z-index:9999;transform:translate(-50%,-50%);transition:width .2s,height .2s,background .2s}}
+#cur-r{{position:fixed;width:36px;height:36px;border:1px solid var(--acc);border-radius:50%;pointer-events:none;z-index:9998;transform:translate(-50%,-50%);opacity:.5;transition:width .25s,height .25s,opacity .3s}}
 
-/* ── Loading Screen ── */
-#loader{{position:fixed;inset:0;background:var(--bg);z-index:10000;display:flex;align-items:center;justify-content:center;transition:opacity .8s ease, visibility .8s}}
-#loader.hidden{{opacity:0;visibility:hidden}}
-.loader-text{{font-family:'Playfair Display',serif;font-size:clamp(1rem,4vw,2rem);color:var(--acc);letter-spacing:.3em;text-transform:uppercase;animation:pulse 1.2s ease-in-out infinite}}
-@keyframes pulse{{0%,100%{{opacity:.3}}50%{{opacity:1}}}}
+/* Loader */
+#loader{{position:fixed;inset:0;background:var(--bg);z-index:10000;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;transition:opacity .8s,visibility .8s}}
+#loader.gone{{opacity:0;visibility:hidden}}
+.l-bar{{width:200px;height:1px;background:var(--border);position:relative;overflow:hidden}}
+.l-bar::after{{content:'';position:absolute;inset:0;background:var(--acc);transform:translateX(-100%);animation:load .9s .2s ease forwards}}
+@keyframes load{{to{{transform:translateX(0)}}}}
+.l-txt{{font-family:var(--font-head);font-size:.8rem;letter-spacing:.4em;text-transform:uppercase;color:var(--acc);opacity:.7}}
 
-/* ── Nav ── */
-nav{{position:fixed;top:0;left:0;right:0;z-index:100;padding:1.5rem 4rem;display:flex;align-items:center;justify-content:space-between;transition:all .4s ease;backdrop-filter:blur(0px)}}
-nav.scrolled{{backdrop-filter:blur(20px);background:rgba(6,6,8,.8);border-bottom:1px solid var(--border);padding:1rem 4rem}}
-.nav-logo{{font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;color:var(--acc);letter-spacing:.1em;text-transform:uppercase;text-decoration:none}}
+/* Nav */
+nav{{position:fixed;top:0;left:0;right:0;z-index:100;padding:1.5rem 5vw;display:flex;align-items:center;justify-content:space-between;transition:all .4s}}
+nav.solid{{backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);background:color-mix(in srgb,var(--bg) 80%,transparent);border-bottom:1px solid var(--border);padding:1rem 5vw}}
+.nav-logo{{font-family:var(--font-head);font-size:1.4rem;color:var(--acc);text-decoration:none;letter-spacing:.05em}}
 .nav-links{{display:flex;gap:2.5rem;list-style:none}}
-.nav-links a{{color:var(--dim);text-decoration:none;font-size:.85rem;letter-spacing:.15em;text-transform:uppercase;transition:color .3s}}
+.nav-links a{{color:var(--dim);text-decoration:none;font-size:.8rem;letter-spacing:.15em;text-transform:uppercase;transition:color .25s}}
 .nav-links a:hover{{color:var(--fg)}}
 
-/* ── Hero ── */
-.hero{{height:100vh;display:grid;place-items:center;position:relative;overflow:hidden;padding:0 4rem}}
-.hero-bg{{position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 40%, rgba(139,92,246,.15) 0%, transparent 70%), radial-gradient(ellipse 60% 40% at 80% 70%, rgba(200,169,110,.1) 0%, transparent 60%)}}
-.hero-noise{{position:absolute;inset:0;opacity:.03;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");background-size:200px 200px}}
-.hero-content{{text-align:center;position:relative;z-index:1}}
-.hero-eyebrow{{font-size:.75rem;letter-spacing:.4em;text-transform:uppercase;color:var(--acc);margin-bottom:2rem;opacity:0;animation:fadeUp .8s .3s forwards}}
-.hero-title{{font-family:'Playfair Display',serif;font-size:clamp(4rem,12vw,10rem);line-height:.9;font-weight:900;letter-spacing:-.02em;margin-bottom:2.5rem;opacity:0;animation:fadeUp .9s .5s forwards}}
-.hero-title em{{font-style:italic;color:var(--acc)}}
-.hero-sub{{font-size:clamp(1rem,2vw,1.2rem);color:var(--dim);max-width:500px;margin:0 auto 3rem;line-height:1.7;opacity:0;animation:fadeUp .9s .7s forwards}}
-.hero-cta{{display:inline-flex;align-items:center;gap:.75rem;padding:1rem 2.5rem;border:1px solid var(--acc);color:var(--acc);text-decoration:none;font-size:.85rem;letter-spacing:.2em;text-transform:uppercase;transition:all .3s;opacity:0;animation:fadeUp .9s .9s forwards}}
-.hero-cta:hover{{background:var(--acc);color:var(--bg)}}
-.scroll-indicator{{position:absolute;bottom:3rem;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:.5rem;opacity:.4;animation:fadeIn 1s 1.5s forwards both}}
-.scroll-line{{width:1px;height:60px;background:linear-gradient(to bottom,transparent,var(--acc));animation:scrollLine 2s ease-in-out infinite}}
-@keyframes scrollLine{{0%{{transform:scaleY(0);transform-origin:top}}50%{{transform:scaleY(1);transform-origin:top}}51%{{transform:scaleY(1);transform-origin:bottom}}100%{{transform:scaleY(0);transform-origin:bottom}}}}
-@keyframes fadeUp{{from{{opacity:0;transform:translateY(40px)}}to{{opacity:1;transform:translateY(0)}}}}
-@keyframes fadeIn{{from{{opacity:0}}to{{opacity:.4}}}}
+/* Hero */
+.hero{{min-height:100vh;display:grid;place-items:center;position:relative;overflow:hidden;padding:10rem 5vw 5rem}}
+.hero-bg{{position:absolute;inset:0;background:radial-gradient(ellipse 70% 50% at 50% 40%,color-mix(in srgb,var(--acc) 12%,transparent),transparent 70%),radial-gradient(ellipse 50% 60% at 80% 80%,color-mix(in srgb,var(--acc2) 8%,transparent),transparent 60%)}}
+.hero-noise{{position:absolute;inset:0;opacity:.025;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 300 300' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");background-size:250px}}
+.hero-inner{{text-align:center;position:relative;z-index:1;max-width:1000px}}
+.eyebrow{{display:block;font-size:.7rem;letter-spacing:.5em;text-transform:uppercase;color:var(--acc);margin-bottom:2rem;opacity:0;animation:up .8s .2s both}}
+h1.display{{font-family:var(--font-head);font-size:clamp(3.5rem,10vw,9rem);line-height:.92;font-weight:900;letter-spacing:-.025em;margin-bottom:2rem;opacity:0;animation:up .9s .4s both}}
+h1.display em{{font-style:italic;color:var(--acc)}}
+.hero-p{{font-size:clamp(.95rem,1.8vw,1.15rem);color:var(--dim);max-width:540px;margin:0 auto 3rem;line-height:1.75;opacity:0;animation:up .9s .6s both}}
+.btn{{display:inline-flex;align-items:center;gap:.6rem;padding:.9rem 2.5rem;border:1px solid var(--acc);color:var(--acc);font-size:.8rem;letter-spacing:.2em;text-transform:uppercase;text-decoration:none;transition:all .3s;opacity:0;animation:up .9s .8s both}}
+.btn:hover{{background:var(--acc);color:var(--bg)}}
+@keyframes up{{from{{opacity:0;transform:translateY(35px)}}to{{opacity:1;transform:none}}}}
 
-/* ── Section Base ── */
-section{{padding:clamp(5rem,12vw,10rem) clamp(1.5rem,6vw,8rem)}}
-.section-label{{font-size:.7rem;letter-spacing:.4em;text-transform:uppercase;color:var(--acc);margin-bottom:1.5rem;display:block}}
-.section-title{{font-family:'Playfair Display',serif;font-size:clamp(2.5rem,6vw,5rem);line-height:1;font-weight:700;margin-bottom:2rem}}
-.reveal{{opacity:0;transform:translateY(50px);transition:opacity .9s ease, transform .9s ease}}
-.reveal.visible{{opacity:1;transform:none}}
+/* Sections */
+.section{{padding:clamp(5rem,10vw,9rem) 5vw}}
+.s-label{{display:block;font-size:.65rem;letter-spacing:.45em;text-transform:uppercase;color:var(--acc);margin-bottom:1rem}}
+.s-title{{font-family:var(--font-head);font-size:clamp(2rem,5vw,4.5rem);line-height:1;font-weight:700;margin-bottom:1rem}}
+.s-sub{{color:var(--dim);font-size:1rem;margin-bottom:3rem}}
+.reveal{{opacity:0;transform:translateY(45px);transition:opacity .9s ease,transform .9s ease}}
+.reveal.in{{opacity:1;transform:none}}
 
-/* ── Products ── */
-.products{{background:var(--bg2)}}
-.products-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:2px;margin-top:4rem}}
-.product-card{{position:relative;aspect-ratio:3/4;overflow:hidden;background:var(--card);border:1px solid var(--border);cursor:none}}
-.product-visual{{width:100%;height:70%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,rgba(200,169,110,.08),rgba(139,92,246,.08));transition:transform .6s ease}}
-.product-card:hover .product-visual{{transform:scale(1.05)}}
-.product-shape{{width:100px;height:140px;border:1px solid var(--acc);border-radius:4px;position:relative;display:flex;align-items:center;justify-content:center}}
-.product-shape::before{{content:'';position:absolute;inset:8px;border:1px solid rgba(200,169,110,.3);border-radius:2px}}
-.product-info{{padding:1.5rem;border-top:1px solid var(--border)}}
-.product-name{{font-family:'Playfair Display',serif;font-size:1.1rem;margin-bottom:.3rem}}
-.product-detail{{font-size:.8rem;color:var(--dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:.5rem}}
-.product-price{{font-size:1rem;color:var(--acc)}}
+/* Cards */
+.bg2{{background:var(--bg2)}}
+.cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:1px;background:var(--border);margin-top:3rem}}
+.card{{background:var(--bg);display:flex;flex-direction:column;transition:background .3s}}
+.card:hover{{background:var(--bg2)}}
+.card-visual{{aspect-ratio:4/3;background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 8%,var(--bg2)),color-mix(in srgb,var(--acc2) 6%,var(--bg2)));display:grid;place-items:center;overflow:hidden;position:relative}}
+.card-visual::after{{content:'';position:absolute;inset:0;background:radial-gradient(circle at 50% 60%,color-mix(in srgb,var(--acc) 15%,transparent),transparent 65%);opacity:0;transition:opacity .5s}}
+.card:hover .card-visual::after{{opacity:1}}
+.card-shape{{width:70px;height:90px;border:1px solid var(--border);transition:transform .5s}}
+.card:hover .card-shape{{transform:scale(1.08) rotate(2deg)}}
+.card-info{{padding:1.5rem;border-top:1px solid var(--border)}}
+.card-name{{font-family:var(--font-head);font-size:1rem;margin-bottom:.3rem}}
+.card-detail{{font-size:.78rem;color:var(--dim);letter-spacing:.05em;margin-bottom:.5rem}}
+.card-price{{font-size:.95rem;color:var(--acc)}}
 
-/* ── Features ── */
-.features-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1px;background:var(--border);margin-top:4rem}}
-.feature{{background:var(--bg);padding:3rem 2.5rem;transition:background .3s}}
-.feature:hover{{background:var(--bg2)}}
-.feature-num{{font-family:'Playfair Display',serif;font-size:3rem;color:var(--border);margin-bottom:1rem;line-height:1}}
-.feature h3{{font-family:'Playfair Display',serif;font-size:1.4rem;margin-bottom:1rem}}
-.feature p{{color:var(--dim);font-size:.9rem;line-height:1.8}}
+/* Features */
+.feat-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0;background:var(--border);margin-top:3rem}}
+.feat{{background:var(--bg);padding:2.5rem 2rem;border-bottom:1px solid var(--border)}}
+.feat:hover{{background:var(--bg2)}}
+.feat-n{{font-family:var(--font-head);font-size:2.5rem;color:var(--border);margin-bottom:1rem;line-height:1}}
+.feat h3{{font-family:var(--font-head);font-size:1.25rem;margin-bottom:.75rem}}
+.feat p{{color:var(--dim);font-size:.875rem;line-height:1.8}}
 
-/* ── CTA Section ── */
-.cta-section{{text-align:center;background:linear-gradient(135deg,rgba(200,169,110,.06),rgba(139,92,246,.06));border-top:1px solid var(--border);border-bottom:1px solid var(--border)}}
-.cta-section .section-title{{font-size:clamp(3rem,8vw,7rem)}}
-
-/* ── Footer ── */
-footer{{padding:3rem clamp(1.5rem,6vw,8rem);border-top:1px solid var(--border);display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:2rem}}
-.footer-brand{{font-family:'Playfair Display',serif;font-size:1.1rem;color:var(--acc)}}
-.footer-links{{display:flex;gap:2rem;justify-content:center}}
-.footer-links a{{color:var(--dim);text-decoration:none;font-size:.8rem;letter-spacing:.15em;text-transform:uppercase;transition:color .2s}}
-.footer-links a:hover{{color:var(--fg)}}
-.footer-copy{{text-align:right;font-size:.75rem;color:var(--dim)}}
-
-/* ── Responsive ── */
-@media(max-width:768px){{
-  nav,nav.scrolled{{padding:1rem 1.5rem}}
-  .nav-links{{display:none}}
-  .hero{{padding:0 1.5rem}}
-  footer{{grid-template-columns:1fr;text-align:center}}
-  .footer-copy{{text-align:center}}
-}}
+/* Footer */
+footer{{padding:3rem 5vw;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1.5rem}}
+.f-brand{{font-family:var(--font-head);font-size:1.1rem;color:var(--acc)}}
+.f-links{{display:flex;gap:2rem}}
+.f-links a{{color:var(--dim);text-decoration:none;font-size:.75rem;letter-spacing:.15em;text-transform:uppercase;transition:color .2s}}
+.f-links a:hover{{color:var(--fg)}}
+.f-copy{{font-size:.73rem;color:var(--dim)}}
+@media(max-width:768px){{nav{{padding:1rem 1.5rem}}.nav-links{{display:none}}footer{{flex-direction:column;text-align:center}}}}
 </style>
 </head>
 <body>
 
-<div id="loader"><span class="loader-text">Loading</span></div>
-<div id="cursor"></div>
-<div id="cursor-ring"></div>
+<div id="loader">
+  <div class="l-bar"></div>
+  <div class="l-txt">Loading</div>
+</div>
+<div id="cur"></div>
+<div id="cur-r"></div>
 
 <nav id="nav">
-  <a class="nav-logo" href="#">{topic.split()[0].upper()}</a>
+  <a class="nav-logo" href="#">{brand}</a>
   <ul class="nav-links">
-    <li><a href="#products">Collection</a></li>
-    <li><a href="#features">Craftsmanship</a></li>
+    <li><a href="#items">{t["section1"]}</a></li>
+    <li><a href="#features">{t["section2"]}</a></li>
     <li><a href="#about">About</a></li>
     <li><a href="#contact">Contact</a></li>
   </ul>
@@ -535,158 +859,100 @@ footer{{padding:3rem clamp(1.5rem,6vw,8rem);border-top:1px solid var(--border);d
 <section class="hero" id="home">
   <div class="hero-bg"></div>
   <div class="hero-noise"></div>
-  <div class="hero-content">
-    <span class="hero-eyebrow">Est. {yr} · Crafted to Perfection</span>
-    <h1 class="hero-title">
-      The Art<br>of <em>{topic.split()[0].title()}</em>
+  <div class="hero-inner">
+    <span class="eyebrow">{t["eyebrow"]}</span>
+    <h1 class="display">
+      {t["hero_h1_line1"]}<br>
+      <em>{t["hero_h1_line2"]}</em>
     </h1>
-    <p class="hero-sub">
-      Where precision engineering meets timeless design.
-      Every detail, intentional. Every moment, extraordinary.
-    </p>
-    <a href="#products" class="hero-cta">
-      Explore Collection
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+    <p class="hero-p">{t["hero_sub"]}</p>
+    <a href="#items" class="btn">
+      {t["cta"]}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
     </a>
   </div>
-  <div class="scroll-indicator">
-    <span style="font-size:.65rem;letter-spacing:.3em;text-transform:uppercase">Scroll</span>
-    <div class="scroll-line"></div>
+</section>
+
+<section id="items" class="section bg2">
+  <span class="s-label reveal">{t["section1"]}</span>
+  <h2 class="s-title reveal">{t["section1_sub"]}</h2>
+  <div class="cards">{cards_html}</div>
+</section>
+
+<section id="features" class="section">
+  <span class="s-label reveal">{t["section2"]}</span>
+  <h2 class="s-title reveal">{t["section2_sub"]}</h2>
+  <div class="feat-grid">
+    <div class="feat reveal"><div class="feat-n">01</div><h3>Uncompromising Quality</h3><p>Every element selected with intention. Standards that exceed industry norms by design.</p></div>
+    <div class="feat reveal"><div class="feat-n">02</div><h3>Heritage & Innovation</h3><p>Decades of expertise fused with forward-thinking methods. Respect for tradition; hunger for the new.</p></div>
+    <div class="feat reveal"><div class="feat-n">03</div><h3>Limited Availability</h3><p>We believe in fewer, better. Each offering is deliberately limited to preserve its meaning.</p></div>
+    <div class="feat reveal"><div class="feat-n">04</div><h3>Lifetime Partnership</h3><p>Our relationship doesn't end at purchase. We stand behind everything, indefinitely.</p></div>
   </div>
 </section>
 
-<section id="products" class="products">
-  <div>
-    <span class="section-label reveal">The Collection</span>
-    <h2 class="section-title reveal">{topic.title()}<br><em style="font-style:italic;color:var(--acc)">Refined</em></h2>
-    <div class="products-grid">
-      {''.join(f'''
-      <div class="product-card reveal">
-        <div class="product-visual">
-          <div class="product-shape"></div>
-        </div>
-        <div class="product-info">
-          <div class="product-name">{topic.split()[0].title()} {s}</div>
-          <div class="product-detail">{mat} · Limited Edition</div>
-          <div class="product-price">${price}</div>
-        </div>
-      </div>''' for s, mat, price in [
-        ("Noir", "Black Steel", "4,200"),
-        ("Blanc", "White Gold", "6,800"),
-        ("Azure", "Titanium", "5,500"),
-        ("Obsidian", "Carbon Fibre", "7,900"),
-      ])}
-    </div>
-  </div>
-</section>
-
-<section id="features">
-  <span class="section-label reveal">Why Choose Us</span>
-  <h2 class="section-title reveal">Craftsmanship<br>Without Compromise</h2>
-  <div class="features-grid">
-    <div class="feature reveal"><div class="feature-num">01</div><h3>Precision Engineering</h3><p>Every component is engineered to tolerances measured in microns, ensuring perfect performance for generations.</p></div>
-    <div class="feature reveal"><div class="feature-num">02</div><h3>Heritage Materials</h3><p>Only the finest materials — titanium, sapphire crystal, 18k gold — are selected for their lasting beauty.</p></div>
-    <div class="feature reveal"><div class="feature-num">03</div><h3>Limited Editions</h3><p>Each piece is numbered and certified, making it not just a purchase but a rare acquisition.</p></div>
-    <div class="feature reveal"><div class="feature-num">04</div><h3>Lifetime Service</h3><p>Your investment is protected. Complimentary servicing and a lifetime guarantee come standard.</p></div>
-  </div>
-</section>
-
-<section id="about" class="cta-section">
-  <span class="section-label reveal">Our Story</span>
-  <h2 class="section-title reveal">Built for<br><em style="font-style:italic;color:var(--acc)">Eternity</em></h2>
-  <p class="reveal" style="max-width:600px;margin:0 auto 3rem;color:var(--dim);font-size:1.1rem;line-height:1.8">
-    Since our founding, we have believed that true luxury lies in the details invisible to most —
-    the weight of a case, the sweep of a hand, the silence between ticks.
+<section id="about" class="section bg2" style="text-align:center">
+  <span class="s-label reveal">Our Story</span>
+  <h2 class="s-title reveal" style="max-width:700px;margin:0 auto 1.5rem">Built for<br><em style="font-style:italic;color:var(--acc)">Eternity</em></h2>
+  <p class="reveal" style="max-width:580px;margin:0 auto 2.5rem;color:var(--dim);line-height:1.85;font-size:1.05rem">
+    True excellence is invisible to the untrained eye. It lives in the details — the weight, the finish, the silence. We obsess so you don't have to.
   </p>
-  <a href="#contact" class="hero-cta reveal">Begin Your Journey</a>
+  <a href="#contact" class="btn reveal" style="margin:0 auto">Get in Touch</a>
 </section>
 
 <footer id="contact">
-  <div class="footer-brand">{topic.split()[0].upper()}</div>
-  <div class="footer-links">
+  <div class="f-brand">{brand}</div>
+  <div class="f-links">
     <a href="#">Instagram</a>
+    <a href="#">LinkedIn</a>
     <a href="#">Contact</a>
     <a href="#">Privacy</a>
   </div>
-  <div class="footer-copy">© {yr} {topic.title()}. Built by A.L.I</div>
+  <div class="f-copy">© {yr} {topic.title()}. Built by A.L.I</div>
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
 <script>
-// ── Loader ──
-window.addEventListener('load', () => {{
-  setTimeout(() => document.getElementById('loader').classList.add('hidden'), 800);
+// Loader
+window.addEventListener('load',()=>setTimeout(()=>document.getElementById('loader').classList.add('gone'),900));
+
+// Cursor
+const cur=document.getElementById('cur'),ring=document.getElementById('cur-r');
+let mx=0,my=0,rx=0,ry=0;
+document.addEventListener('mousemove',e=>{{mx=e.clientX;my=e.clientY;cur.style.left=mx+'px';cur.style.top=my+'px'}});
+(function loop(){{rx+=(mx-rx)*.1;ry+=(my-ry)*.1;ring.style.left=rx+'px';ring.style.top=ry+'px';requestAnimationFrame(loop)}})();
+document.querySelectorAll('a,button,.card').forEach(el=>{{
+  el.addEventListener('mouseenter',()=>{{cur.style.width='18px';cur.style.height='18px';ring.style.width='56px';ring.style.height='56px';ring.style.opacity='1'}});
+  el.addEventListener('mouseleave',()=>{{cur.style.width='10px';cur.style.height='10px';ring.style.width='36px';ring.style.height='36px';ring.style.opacity='.5'}});
 }});
 
-// ── Custom Cursor ──
-const cur = document.getElementById('cursor');
-const ring = document.getElementById('cursor-ring');
-let mx = 0, my = 0, rx = 0, ry = 0;
-document.addEventListener('mousemove', e => {{
-  mx = e.clientX; my = e.clientY;
-  cur.style.left = mx + 'px';
-  cur.style.top  = my + 'px';
-}});
-(function animRing() {{
-  rx += (mx - rx) * 0.12;
-  ry += (my - ry) * 0.12;
-  ring.style.left = rx + 'px';
-  ring.style.top  = ry + 'px';
-  requestAnimationFrame(animRing);
-}})();
-document.querySelectorAll('a, button, .product-card').forEach(el => {{
-  el.addEventListener('mouseenter', () => {{
-    cur.style.width = '20px'; cur.style.height = '20px';
-    ring.style.width = '60px'; ring.style.height = '60px';
-    ring.style.opacity = '1';
-  }});
-  el.addEventListener('mouseleave', () => {{
-    cur.style.width = '12px'; cur.style.height = '12px';
-    ring.style.width = '40px'; ring.style.height = '40px';
-    ring.style.opacity = '.6';
-  }});
-}});
+// Nav scroll
+const nav=document.getElementById('nav');
+let lastY=0;
+window.addEventListener('scroll',()=>{{const y=window.scrollY;nav.classList.toggle('solid',y>50);lastY=y}});
 
-// ── Nav scroll effect ──
-const nav = document.getElementById('nav');
-window.addEventListener('scroll', () => {{
-  nav.classList.toggle('scrolled', window.scrollY > 60);
-}});
-
-// ── GSAP Scroll Reveals ──
+// GSAP ScrollTrigger reveals
 gsap.registerPlugin(ScrollTrigger);
-document.querySelectorAll('.reveal').forEach(el => {{
-  gsap.fromTo(el,
-    {{ opacity: 0, y: 60 }},
-    {{
-      opacity: 1, y: 0,
-      duration: 1, ease: 'power3.out',
-      scrollTrigger: {{ trigger: el, start: 'top 85%', toggleActions: 'play none none none' }}
-    }}
-  );
-}});
-
-// ── Product card 3D tilt ──
-document.querySelectorAll('.product-card').forEach(card => {{
-  card.addEventListener('mousemove', e => {{
-    const r = card.getBoundingClientRect();
-    const x = (e.clientX - r.left) / r.width  - .5;
-    const y = (e.clientY - r.top)  / r.height - .5;
-    card.style.transform = `perspective(800px) rotateY(${{x * 10}}deg) rotateX(${{-y * 10}}deg)`;
-  }});
-  card.addEventListener('mouseleave', () => {{
-    card.style.transform = 'perspective(800px) rotateY(0) rotateX(0)';
-    card.style.transition = 'transform .5s ease';
+gsap.utils.toArray('.reveal').forEach(el=>{{
+  gsap.fromTo(el,{{opacity:0,y:50}},{{
+    opacity:1,y:0,duration:1,ease:'power3.out',
+    scrollTrigger:{{trigger:el,start:'top 86%',toggleActions:'play none none none'}}
   }});
 }});
 
-// ── Smooth scroll ──
-document.querySelectorAll('a[href^="#"]').forEach(a => {{
-  a.addEventListener('click', e => {{
-    e.preventDefault();
-    document.querySelector(a.getAttribute('href'))?.scrollIntoView({{behavior:'smooth'}});
+// Card 3D tilt
+document.querySelectorAll('.card').forEach(c=>{{
+  c.addEventListener('mousemove',e=>{{
+    const r=c.getBoundingClientRect(),x=(e.clientX-r.left)/r.width-.5,y=(e.clientY-r.top)/r.height-.5;
+    c.style.transform=`perspective(700px) rotateY(${{x*8}}deg) rotateX(${{-y*8}}deg)`;
+    c.style.transition='transform .05s';
   }});
+  c.addEventListener('mouseleave',()=>{{c.style.transform='';c.style.transition='transform .5s ease'}});
+}});
+
+// Smooth scroll
+document.querySelectorAll('a[href^="#"]').forEach(a=>{{
+  a.addEventListener('click',e=>{{e.preventDefault();document.querySelector(a.getAttribute('href'))?.scrollIntoView({{behavior:'smooth'}})}});
 }});
 </script>
 </body>
@@ -697,14 +963,26 @@ document.querySelectorAll('a[href^="#"]').forEach(a => {{
 
 def website_builder(parameters: dict, player=None, speak=None) -> str:
     topic  = parameters.get("topic", "luxury brand website")
-    style  = parameters.get("style", "dark luxury minimalist")
+    style  = parameters.get("style", "award-winning minimalist")
     pages  = parameters.get("pages") or ["index"]
     if isinstance(pages, str):
         pages = [p.strip() for p in pages.split(",")]
 
-    slug = re.sub(r'[^a-z0-9]+', '_', topic.lower())[:40]
+    category = _classify_topic(topic)
+    # Force variant if requested, otherwise pick randomly — ensures every build looks different
+    forced_variant = parameters.get("variant", "").strip().lower()
+    if forced_variant:
+        variant = next((v for v in LAYOUT_VARIANTS if v["id"] == forced_variant), None)
+    else:
+        variant = None
+    if variant is None:
+        variant = random.choice(LAYOUT_VARIANTS)
+
+    # Use timestamp in dir so each build is fresh, never overwrites previous
+    ts   = time.strftime("%H%M%S")
+    slug = re.sub(r'[^a-z0-9]+', '_', topic.lower())[:30]
     base = Path(parameters.get("output_dir") or
-                Path.home() / "Desktop" / "ali_sites" / slug)
+                Path.home() / "Desktop" / "ali_sites" / f"{slug}_{variant['id']}_{ts}")
     base.mkdir(parents=True, exist_ok=True)
 
     log = BuildLog(base / "build_log.txt")
@@ -719,71 +997,107 @@ def website_builder(parameters: dict, player=None, speak=None) -> str:
 
     # Load API key
     try:
-        api_key_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
-        api_key = json.loads(api_key_path.read_text())["gemini_api_key"]
+        api_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+        api_key  = json.loads(api_path.read_text())["gemini_api_key"]
     except Exception as e:
-        log.add(f"API key error: {e}")
-        return "Cannot build — API key not found."
+        return f"Cannot build — API key error: {e}"
 
-    say(f"On it, Ali. Building a premium {style} website for {topic}. "
-        f"I'll research Awwwards first, then build the full site.")
+    ref_urls = INDUSTRY_REFS.get(category, INDUSTRY_REFS["default"])
+    log.add(f"Topic: {topic} | Category: {category} | Style: {style}")
+    log.add(f"Layout variant: {variant['name']}")
+    log.add(f"Reference sites: {ref_urls}")
 
-    # ── Phase 1: Scrape Awwwards ──
-    log.add("═══ PHASE 1: RESEARCHING AWWWARDS.COM ═══")
-    say("Opening Awwwards.com for design inspiration...")
+    say(f"On it, Ali. This is a {category} website, layout: {variant['name']}. "
+        f"Visiting {len(ref_urls)} real industry sites for fresh inspiration.")
+
+    # ── Phase 1: Screenshot reference sites ──
+    log.add("═══ PHASE 1: VISITING INDUSTRY REFERENCE SITES ═══")
     try:
-        sites = asyncio.run(_scrape_awwwards(log))
-        log.add(f"Research complete — {len(sites)} reference sites collected")
+        screenshots = asyncio.run(_screenshot_sites(ref_urls, log))
     except Exception as e:
-        log.add(f"Scrape error: {e}")
-        sites = []
+        log.add(f"Screenshot phase error: {e}")
+        screenshots = []
 
-    # ── Phase 2: Design Analysis ──
-    log.add("═══ PHASE 2: ANALYZING DESIGN PATTERNS ═══")
-    say("Analyzing award-winning design patterns...")
-    design_brief = _analyze_with_gemini(sites, topic, style, api_key, log)
-    log.add("Design brief ready. Here's a summary:")
-    for line in design_brief.split('\n')[:5]:
-        if line.strip():
-            log.add(f"  {line.strip()}")
+    # ── Phase 2: Design fusion ──
+    log.add("═══ PHASE 2: FUSING DESIGN DNA ═══")
+    say(f"Analyzed {len(screenshots)} sites. Now fusing their design DNA into a unique brief...")
+    brief = _fuse_designs(screenshots, topic, style, category, api_key, log)
+    log.add("Design fusion complete. Key decisions:")
+    for ln in brief.split('\n')[:6]:
+        if ln.strip():
+            log.add(f"  {ln.strip()[:100]}")
 
-    # ── Phase 3: Generate Code ──
-    log.add("═══ PHASE 3: GENERATING WEBSITE CODE ═══")
-    say("Generating the full website with animations, products, and effects. This takes about 30 seconds...")
-    files = _generate_html(topic, style, pages, design_brief, api_key, log)
+    # ── Phase 3: Generate HTML ──
+    log.add(f"═══ PHASE 3: GENERATING [{variant['name'].upper()}] LAYOUT ═══")
+    say(f"Generating a {variant['name']} layout — this is one of 6 different design approaches, "
+        f"so it will look genuinely different. 30-90 seconds...")
+    files = _generate_html(topic, style, pages, brief, category, screenshots, api_key, log, variant)
 
-    # ── Phase 4: Write Files ──
-    log.add("═══ PHASE 4: WRITING FILES ═══")
+    # ── Phase 4: Validate & Write ──
+    log.add("═══ PHASE 4: VALIDATING & WRITING FILES ═══")
     written = []
+
     if files:
         for fname, content in files.items():
+            issues = _validate_html(content)
+            if issues:
+                log.add(f"⚠️  {fname}: {', '.join(issues)} — using category fallback")
+                content = _build_fallback(topic, style, category)
             out = base / fname
             out.write_text(content, encoding="utf-8")
             written.append(fname)
-            log.add(f"Wrote {fname} ({len(content):,} chars)")
+            log.add(f"✅ Wrote {fname} ({len(content):,} chars)")
     else:
-        log.add("Gemini output could not be parsed — using premium fallback template")
-        html = _build_fallback(topic, style)
-        (base / "index.html").write_text(html, encoding="utf-8")
-        written = ["index.html"]
-        log.add(f"Wrote fallback index.html ({len(html):,} chars)")
+        log.add("No valid files from Gemini — using category-specific fallback")
 
-    # ── Phase 5: Serve & Open ──
-    log.add("═══ PHASE 5: LAUNCHING LOCAL SERVER ═══")
+    # Ensure index.html always exists
+    if "index.html" not in written:
+        html_files = [f for f in written if f.endswith(".html")]
+        if html_files:
+            content = (base / html_files[0]).read_text(encoding="utf-8")
+            (base / "index.html").write_text(content, encoding="utf-8")
+            written.insert(0, "index.html")
+            log.add(f"Copied {html_files[0]} → index.html")
+        else:
+            log.add(f"Writing {category} category fallback template")
+            html = _build_fallback(topic, style, category)
+            (base / "index.html").write_text(html, encoding="utf-8")
+            written.insert(0, "index.html")
+            log.add(f"Wrote fallback ({len(html):,} chars)")
+
+    # Emergency safety check
+    idx_path = base / "index.html"
+    if not idx_path.exists() or idx_path.stat().st_size < 1000:
+        html = _build_fallback(topic, style, category)
+        idx_path.write_text(html, encoding="utf-8")
+        log.add("Emergency fallback written")
+
+    # ── Phase 5: Serve, Verify, Open ──
+    log.add("═══ PHASE 5: SERVING & VERIFYING ═══")
     port = _find_free_port()
     _serve(str(base), port)
-    time.sleep(0.6)
     url = f"http://localhost:{port}/index.html"
+    log.add(f"Server started on :{port} — verifying HTTP 200...")
+
+    ok = _verify_server(url, retries=12, delay=0.4)
+    if not ok:
+        port = _find_free_port(start=port + 1)
+        _serve(str(base), port)
+        url = f"http://localhost:{port}/index.html"
+        ok = _verify_server(url, retries=10, delay=0.5)
+
+    status_str = "✅ HTTP 200 confirmed" if ok else "⚠️ could not verify — opening anyway"
+    log.add(f"Server status: {status_str}")
     _open_browser(url)
-    log.add(f"Server running at {url}")
-    log.add(f"Build log saved at: {base / 'build_log.txt'}")
+    log.add(f"Opened in browser: {url}")
     log.add("═══ BUILD COMPLETE ═══")
 
-    say(f"Done, Ali! Your {topic} website is open in the browser. "
-        f"It has {len(written)} page(s) with animations, product section, and custom cursor. "
-        f"If you want to see exactly what I did, just ask me to show the build log.")
+    other_variants = [v["name"] for v in LAYOUT_VARIANTS if v["id"] != variant["id"]]
+    say(f"Done, Ali! Your {topic} website — {variant['name']} layout — is {'verified' if ok else 'open'} in the browser. "
+        f"I researched real {category} brand sites and fused their design DNA. "
+        f"Don't like this layout? Say 'build it again' and I'll try a completely different one. "
+        f"Other available layouts: {', '.join(other_variants[:3])}.")
 
-    return (f"Website built at {base}\n"
-            f"URL: {url}\n"
-            f"Files: {', '.join(written)}\n"
+    return (f"Website: {url} | {'OK' if ok else 'CHECK'} | "
+            f"Files: {', '.join(written)} | Category: {category} | "
             f"Log: {base / 'build_log.txt'}")
