@@ -21,5 +21,6 @@ dependencies = [
     "requests>=2.33.1",
     "send2trash>=2.1.0",
     "sounddevice>=0.5.5",
+    "speechrecognition>=3.16.0",
     "youtube-transcript-api>=1.2.4",
 ]

@@ -1,0 +1,97 @@
+{
+  "identity": {},
+  "preferences": {},
+  "projects": {},
+  "relationships": {},
+  "wishes": {},
+  "notes": {
+    "self_sufficient": {
+      "value": "Expressed belief that it is self-sufficient and operates automatically.",
+      "updated": "2026-04-23"
+    },
+    "confirmation": {
+      "value": "User confirmation.",
+      "updated": "2026-04-23"
+    },
+    "negative_feedback": {
+      "value": "User gave negative feedback ('not a good teacher').",
+      "updated": "2026-04-23"
+    },
+    "feedback_continuation": {
+      "value": "Continued negative feedback ('good teacher' mentioned sarcastically or contextually).",
+      "updated": "2026-04-23"
+    },
+    "video_created": {
+      "value": "User stated a video was created.",
+      "updated": "2026-04-23"
+    },
+    "single_video": {
+      "value": "Reference to a single video.",
+      "updated": "2026-04-23"
+    },
+    "amount_mentioned_2": {
+      "value": "Mentioned 6-7 thousand.",
+      "updated": "2026-04-23"
+    },
+    "listen_request": {
+      "value": "User requested to be listened to.",
+      "updated": "2026-04-23"
+    },
+    "mentioned_zoeb": {
+      "value": "Mentioned Zoeb.",
+      "updated": "2026-04-23"
+    },
+    "zohaib_reference": {
+      "value": "Reference to Zohaib.",
+      "updated": "2026-04-23"
+    },
+    "relationship_context": {
+      "value": "Context about relationship dynamics.",
+      "updated": "2026-04-23"
+    }
+  },
+  "financial_details": {
+    "amount_5000": {
+      "value": "Mentioned amount: 5000.",
+      "updated": "2026-04-23"
+    },
+    "cost_per_video": {
+      "value": "Questioned cost per video.",
+      "updated": "2026-04-23"
+    },
+    "payment_10000": {
+      "value": "User will pay 10000.",
+      "updated": "2026-04-23"
+    },
+    "offer_10000": {
+      "value": "Offered 10000 for creation.",
+      "updated": "2026-04-23"
+    },
+    "offer_20000": {
+      "value": "Offer mentioned: 20000.",
+      "updated": "2026-04-23"
+    },
+    "zohaib_10000_offer": {
+      "value": "Questioned Zohaib if he wants 10000.",
+      "updated": "2026-04-23"
+    },
+    "offer_20000_2": {
+      "value": "Stated 20000 will be given.",
+      "updated": "2026-04-23"
+    },
+    "payment_distribution": {
+      "value": "2000 total; 10000 to Zohaib; 10000 to Zaifa. (Note: amounts sum to 30000, not 2000)",
+      "updated": "2026-04-23"
+    }
+  },
+  "tasks": {
+    "guide_video_creation": {
+      "value": "Guide someone else through video creation process.",
+      "updated": "2026-04-23"
+    },
+    "user_must_create": {
+      "value": "User must create, the other person does nothing.",
+      "updated": "2026-04-23"
+    }
+  }
+}
