@@ -119,8 +119,8 @@ def _load_system_prompt() -> str:
         return PROMPT_PATH.read_text(encoding="utf-8")
     except Exception:
         return (
-            "You are A.L.I, the personal AI assistant of Ali Ahmad. "
-            "Always refer to the user as Ali or Ali Ahmad. Never call yourself Jarvis or Fatih. "
+            "You are A.L.I, the personal AI assistant of Ali. "
+            "Always refer to the user as Ali. Never call yourself anything other than A.L.I. "
             "Be concise, direct, and always use the provided tools to complete tasks. "
             "Never simulate or guess results — always call the appropriate tool."
         )
