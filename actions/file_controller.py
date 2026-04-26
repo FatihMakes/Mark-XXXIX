@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import platform
 from pathlib import Path
 from datetime import datetime
@@ -70,20 +71,65 @@ def _get_videos() -> Path:
     return Path.home() / "Videos"
 
 
-def _resolve_path(raw: str) -> Path:
-    shortcuts: dict[str, Path] = {
-        "desktop":   _get_desktop(),
-        "downloads": _get_downloads(),
-        "documents": _get_documents(),
-        "pictures":  _get_pictures(),
-        "music":     _get_music(),
-        "videos":    _get_videos(),
-        "home":      Path.home(),
+def _resolve_path(raw: str, current_cwd: str | Path | None = None) -> Path:
+    shortcuts = {
+        "desktop": _get_desktop(), "downloads": _get_downloads(),
+        "documents": _get_documents(), "pictures": _get_pictures(),
+        "music": _get_music(), "videos": _get_videos(), "home": Path.home(),
     }
-    lower = raw.strip().lower()
+    raw_clean = raw.strip()
+    lower = raw_clean.lower()
+
+    # 1. Точный шорткат
     if lower in shortcuts:
         return shortcuts[lower]
-    return Path(raw).expanduser()
+
+    # 2. Абсолютный путь
+    candidate = Path(raw_clean)
+    if candidate.is_absolute():
+        return candidate.resolve()
+
+    # 3. Относительный путь: склеиваем с current_cwd или Home
+    base = current_cwd if current_cwd else Path.home()
+    if isinstance(base, str):
+        base = Path(base)
+    if not base.is_absolute():
+        base = Path.home() / base
+
+    return (base / raw_clean).resolve()
+    
+    # Если есть контекст и путь относительный → используем текущую папку как базу
+    if current_cwd and not Path(raw).is_absolute():
+        if isinstance(current_cwd, str):
+            cwd_lower = current_cwd.strip().lower()
+            # 1. Проверяем, не шорткат ли это
+            if cwd_lower in shortcuts:
+                base = shortcuts[cwd_lower]
+            else:
+                # 2. Если строка пути — резолвим относительно Home, а не папки проекта
+                base = Path(current_cwd).expanduser()
+                if not base.is_absolute():
+                    base = Path.home() / base
+                base = base.resolve()
+        else:
+            base = current_cwd
+            
+        candidate = (base / raw).resolve()
+        if _is_safe_path(candidate):
+            return candidate
+
+def _parse_path_with_filename(raw_path: str) -> tuple[Path, str]:
+    normalized = raw_path.strip().replace("/", "\\")
+    
+    if "\\" in normalized:
+        parts = normalized.split("\\", 1)
+        shortcut = parts[0].strip().lower()
+        filename = parts[1].strip() if len(parts) > 1 else ""
+        
+        base = _resolve_path(shortcut)
+        return base, filename
+    
+    return _resolve_path(normalized), ""
 
 def _format_size(b: int) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -104,9 +150,9 @@ def _safe_trash(target: Path) -> str:
     return f"Moved to Trash: {target.name}"
 
 
-def list_files(path: str = "desktop", show_hidden: bool = False) -> str:
+def list_files(path: str = "desktop", show_hidden: bool = False, current_cwd: str | Path | None = None) -> str:
     try:
-        target = _resolve_path(path)
+        target = _resolve_path(path, current_cwd=current_cwd)
         if not _is_safe_path(target):
             return f"Access denied: {target}"
         if not target.exists():
@@ -302,9 +348,10 @@ def write_file(path: str, name: str = "", content: str = "",
 
 
 def find_files(name: str = "", extension: str = "",
-               path: str = "home", max_results: int = 20) -> str:
+               path: str = "home", max_results: int = 20,
+               item_type: str = "file", current_cwd: str | Path | None = None) -> str:
     try:
-        search_path = _resolve_path(path)
+        search_path = _resolve_path(path, current_cwd=current_cwd)
         if not _is_safe_path(search_path):
             return f"Access denied: {search_path}"
         if not search_path.exists():
@@ -315,19 +362,34 @@ def find_files(name: str = "", extension: str = "",
         max_dirs   = 500  # performans + güvenlik limiti
 
         for item in search_path.rglob("*"):
+            # Фильтр по типу: file / folder / both
+            if item_type == "file" and not item.is_file():
+                continue
+            if item_type == "folder" and not item.is_dir():
+                continue
+            # Если "both" — пропускаем проверку типа
+            
+            # Считаем только папки для лимита (чтобы не зависнуть)
             if item.is_dir():
                 dir_count += 1
                 if dir_count > max_dirs:
                     break
+            
+            # Для файлов: фильтр по расширению
+            if item.is_file() and extension and item.suffix.lower() != extension.lower():
                 continue
-            if not item.is_file():
-                continue
-            if extension and item.suffix.lower() != extension.lower():
-                continue
+            
+            # Фильтр по имени (для файлов и папок)
             if name and name.lower() not in item.name.lower():
                 continue
-            size = _format_size(item.stat().st_size)
-            results.append(f"📄 {item.name} ({size}) — {item.parent}")
+                
+            # Формирование результата
+            if item.is_dir():
+                results.append(f"📁 {item.name}/ — {item.parent}")
+            else:
+                size = _format_size(item.stat().st_size)
+                results.append(f"📄 {item.name} ({size}) — {item.parent}")
+            
             if len(results) >= max_results:
                 break
 
@@ -467,11 +529,62 @@ def get_file_info(path: str, name: str = "") -> str:
     except Exception as e:
         return f"Could not get file info: {e}"
 
+
+def open_file_or_folder(path: str = "", name: str = "", current_cwd: str | Path | None = None) -> str:
+    """
+    Открывает файл или папку в системном проводнике.
+    Поддерживает: 
+      - 'открой загрузки' → path='downloads'
+      - 'открой файл в загрузках' → path='downloads', name='file.png'
+      - 'открой downloads/файл.png' → path='downloads/файл.png' (парсится автоматически)
+    """
+    try:
+        # Если path содержит вложенный путь (downloads/file.png) — парсим его
+        if path and ("\\" in path or "/" in path):
+            base, parsed_name = _parse_path_with_filename(path)
+            # Если name не передан отдельно — используем распарсенный
+            target = (base / parsed_name) if parsed_name else base
+        else:
+            # Стандартная логика: base + name
+            base = _resolve_path(path, current_cwd=current_cwd) if path else (Path(current_cwd) if current_cwd else Path.home())
+            target = (base / name) if name else base
+        
+        try:
+            target_resolved = target.resolve()
+        except Exception:
+            return f"Invalid path: {target}"
+            
+        if not _is_safe_path(target_resolved):
+            return f"Access denied: {target_resolved}"
+        
+        if not target_resolved.exists():
+            return f"Not found: {target_resolved}"
+        
+        # Кроссплатформенное открытие
+        if _OS == "Windows":
+            os.startfile(str(target_resolved))
+        elif _OS == "Darwin":
+            subprocess.run(["open", str(target_resolved)], capture_output=True, check=True)
+        else:
+            subprocess.run(["xdg-open", str(target_resolved)], capture_output=True, check=True)
+        
+        return f"Opened: {target.name}"
+        
+    except PermissionError:
+        return f"Permission denied: {path or name}"
+    except FileNotFoundError:
+        return f"File not found: {path or name}"
+    except Exception as e:
+        # Логируем ошибку для отладки, но не ломаем ассистента
+        print(f"[file_controller.open] Error: {e}")
+        return f"Could not open: {type(e).__name__}"
+
 def file_controller(
     parameters: dict = None,
     response=None,
     player=None,
     session_memory=None,
+    current_cwd: str | Path | None = None,
 ) -> str:
     params = parameters or {}
     action = params.get("action", "").lower().strip()
@@ -483,7 +596,7 @@ def file_controller(
 
     try:
         if action == "list":
-            return list_files(path)
+            return list_files(path, current_cwd=current_cwd)
 
         elif action == "create_file":
             return create_file(path, name=name, content=params.get("content", ""))
@@ -519,6 +632,8 @@ def file_controller(
                 extension=params.get("extension", ""),
                 path=path,
                 max_results=min(int(params.get("max_results", 20)), 50),
+                item_type=params.get("type", "file"),
+                current_cwd=current_cwd,
             )
 
         elif action == "largest":
@@ -535,7 +650,10 @@ def file_controller(
 
         elif action == "info":
             return get_file_info(path, name=name)
-
+        
+        elif action == "open":
+            return open_file_or_folder(path, name=name, current_cwd=current_cwd)
+        
         else:
             return f"Unknown action: '{action}'"
 

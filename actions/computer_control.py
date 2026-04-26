@@ -8,6 +8,14 @@ import time
 import random
 from pathlib import Path
 
+_SPECIAL_CHARS = re.compile(r'[()|/\{}[\]~`@#$%^&*+=<>?";:,\']')
+
+try:
+    import keyboard
+    _HAS_KEYBOARD = True
+except ImportError:
+    _HAS_KEYBOARD = False 
+
 try:
     import pyautogui
     pyautogui.FAILSAFE = True
@@ -21,6 +29,12 @@ try:
     _PYPERCLIP = True
 except ImportError:
     _PYPERCLIP = False
+    
+try:
+    import pywinctl as pwc
+    _PYWINCTL = True
+except ImportError:
+    _PYWINCTL = False
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -143,27 +157,53 @@ def _user_profile() -> dict:
     return {}
 
 def _type(text: str, interval: float = 0.03) -> str:
-    _require_pyautogui()
-    time.sleep(0.3)
-    pyautogui.typewrite(text, interval=interval)
-    return f"Typed: {text[:60]}{'…' if len(text) > 60 else ''}"
+    time.sleep(0.2)
+    
+    if _SPECIAL_CHARS.search(text) or len(text) > 20:
+        if not _PYPERCLIP:
+            try:
+                import keyboard
+                keyboard.write(text[:200], delay=0.04)
+                return f"Typed (kb): {text[:40]}{'…' if len(text) > 40 else ''}"
+            except Exception as e:
+                return f"Type failed (no pyperclip, kb error): {e}"
+        pyperclip.copy(text)
+        time.sleep(0.2)
+        _require_pyautogui()
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.1)
+        return f"Typed (clipboard): {text[:40]}{'…' if len(text) > 40 else ''}"
+
+    try:
+        import keyboard
+        keyboard.write(text, delay=interval)
+        return f"Typed: {text[:40]}{'…' if len(text) > 40 else ''}"
+    except Exception:
+        pyperclip.copy(text)
+        pyautogui.hotkey("ctrl", "v")
+        return f"Typed (fallback): {text[:40]}{'…' if len(text) > 40 else ''}"
 
 
 def _smart_type(text: str, clear_first: bool = True) -> str:
-    _require_pyautogui()
     if clear_first:
         _clear_field()
-        time.sleep(0.1)
-
-    if len(text) > 20 and _PYPERCLIP:
+    time.sleep(0.1)
+    
+    if _SPECIAL_CHARS.search(text) or len(text) > 20:
         pyperclip.copy(text)
-        time.sleep(0.1)
+        time.sleep(0.15)
+        _require_pyautogui()
+        pyautogui.hotkey("ctrl", "v", interval=0.1)
+        return f"Smart-typed (clipboard): {text[:40]}{'…' if len(text) > 40 else ''}"
+
+    try:
+        import keyboard
+        keyboard.write(text, delay=0.03)
+        return f"Smart-typed: {text[:40]}{'…' if len(text) > 40 else ''}"
+    except Exception:
+        pyperclip.copy(text)
         pyautogui.hotkey("ctrl", "v")
-        return f"Smart-typed (clipboard): {text[:60]}{'…' if len(text) > 60 else ''}"
-
-    pyautogui.typewrite(text, interval=0.04)
-    return f"Smart-typed: {text[:60]}{'…' if len(text) > 60 else ''}"
-
+        return f"Smart-typed (fallback): {text[:40]}{'…' if len(text) > 40 else ''}"
 
 def _click(x=None, y=None, button: str = "left", clicks: int = 1) -> str:
     _require_pyautogui()
@@ -294,6 +334,44 @@ def _focus_window(title: str) -> str:
             return f"focus_window (Linux) failed: {e}"
 
     return f"focus_window: unknown OS '{os_name}'"
+
+def _window_op(title: str, action: str) -> str:
+    """Найти окно по части названия и выполнить действие."""
+    if not _PYWINCTL:
+        # Fallback: focus + hotkey через pyautogui
+        _focus_window(title)
+        import time; time.sleep(0.3)
+        if action == "minimize":
+            import pyautogui; pyautogui.hotkey("win", "down")
+        elif action in ("close", "close_app"):
+            import pyautogui; pyautogui.hotkey("alt", "f4")
+        elif action == "maximize":
+            import pyautogui; pyautogui.hotkey("win", "up")
+        return f"{action} sent to '{title}' (hotkey fallback — install pywinctl for reliability)"
+
+    try:
+        all_wins = pwc.getAllWindows()
+        title_lower = title.lower()
+        matches = [w for w in all_wins if title_lower in (w.title or "").lower()]
+        if not matches:
+            return f"No window found containing '{title}'"
+        w = matches[0]
+        win_title = w.title
+        if action == "minimize":
+            w.minimize()
+        elif action == "maximize":
+            w.maximize()
+        elif action == "restore":
+            w.restore()
+        elif action in ("close", "close_app"):
+            w.close()
+        elif action == "focus":
+            w.activate()
+        else:
+            return f"Unknown window action: '{action}'"
+        return f"{action.capitalize()}d: {win_title}"
+    except Exception as e:
+        return f"Window '{action}' failed: {e}"
 
 def _screen_find(description: str) -> tuple[int, int] | None:
     api_key = _get_api_key()
@@ -476,6 +554,11 @@ def computer_control(
 
         if action == "focus_window":
             return _focus_window(params.get("title", ""))
+
+        if action in ("minimize_window", "maximize_window", "restore_window",
+                      "close_window_by_title", "focus_window_by_title"):
+            op = action.replace("_window", "").replace("_by_title", "")
+            return _window_op(params.get("title", ""), op)
 
         if action == "random_data":
             dt     = params.get("type", "name")

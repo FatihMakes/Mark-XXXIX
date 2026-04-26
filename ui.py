@@ -38,7 +38,7 @@ class JarvisUI:
         self.root = tk.Tk()
         self.root.title("J.A.R.V.I.S — MARK XXXVII")
         self.root.resizable(False, False)
-
+        self.on_interrupt = None
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         W  = min(sw, 984)
@@ -107,7 +107,7 @@ class JarvisUI:
         self._build_mute_button()
 
         self.root.bind("<F4>", lambda e: self._toggle_mute())
-
+        self.root.bind("<F5>", lambda e: self.on_interrupt() if self.on_interrupt else None)
         self._api_key_ready = self._api_keys_exist()
         if not self._api_key_ready:
             self._show_setup_ui()

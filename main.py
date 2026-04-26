@@ -234,13 +234,14 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info"},
+                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info | open"},
                 "path":        {"type": "STRING", "description": "File/folder path or shortcut: desktop, downloads, documents, home"},
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},
                 "new_name":    {"type": "STRING", "description": "New name for rename"},
                 "content":     {"type": "STRING", "description": "Content for create_file/write"},
                 "name":        {"type": "STRING", "description": "File name to search for"},
                 "extension":   {"type": "STRING", "description": "File extension to search (e.g. .pdf)"},
+                "type": { "type": "STRING", "description": "Search for: file | folder | both (default: file)" },
                 "count":       {"type": "INTEGER", "description": "Number of results for largest"},
             },
             "required": ["action"]
@@ -315,7 +316,7 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | random_data | user_data"},
+                "action":      {"type": "STRING", "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | focus_window_by_title | minimize_window | maximize_window | restore_window | close_window_by_title | screen_find | screen_click | random_data | user_data"},
                 "text":        {"type": "STRING", "description": "Text to type or paste"},
                 "x":           {"type": "INTEGER", "description": "X coordinate"},
                 "y":           {"type": "INTEGER", "description": "Y coordinate"},
@@ -431,8 +432,10 @@ class JarvisLive:
         self._is_speaking   = False
         self._speaking_lock = threading.Lock()
         self.ui.on_text_command = self._on_text_command
+        self.ui.on_interrupt = self.interrupt_speaking
         self._turn_done_event: asyncio.Event | None = None
-
+        self.file_cwd = None  # Память текущей папки для навигации
+        self._interrupt_flag = threading.Event()
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
             return
@@ -443,7 +446,14 @@ class JarvisLive:
             ),
             self._loop
         )
-
+    async def _run(self, fn, timeout: int = 25) -> str:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, fn),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                return f"Timed out after {timeout}s."
     def set_speaking(self, value: bool):
         with self._speaking_lock:
             self._is_speaking = value
@@ -451,6 +461,20 @@ class JarvisLive:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
+            
+    def interrupt_speaking(self):
+        """Прерывает текущий ответ — вызывается из UI."""
+        self._interrupt_flag.set()
+        # Дренируем очередь (best-effort из другого потока)
+        q = self.audio_in_queue
+        if q:
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except Exception:
+                    break
+        self.set_speaking(False)
+        self.ui.write_log("SYS: Interrupted.")
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -526,36 +550,53 @@ class JarvisLive:
                 response={"result": "ok", "silent": True}
             )
 
-        loop   = asyncio.get_event_loop()
         result = "Done."
 
         try:
             if name == "open_app":
-                r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
+                r = await self._run(lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
 
             elif name == "weather_report":
-                r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
+                r = await self._run(lambda: weather_action(parameters=args, player=self.ui))
                 result = r or "Weather delivered."
 
             elif name == "browser_control":
-                r = await loop.run_in_executor(None, lambda: browser_control(parameters=args, player=self.ui))
+                r = await self._run(lambda: browser_control(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "file_controller":
-                r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
+                r = await loop.run_in_executor(
+                    None, 
+                    lambda a=args, cwd=self.file_cwd: file_controller(parameters=a, player=self.ui, current_cwd=cwd)
+                )
                 result = r or "Done."
+                
+                act = args.get("action", "").lower()
+                if act in ("list", "open") and r and "denied" not in r.lower() and "not found" not in r.lower() and "error" not in r.lower():
+                    p = args.get("path", "").strip()
+                    if p:
+                        p = p.replace("/", "\\")
+                        # Если это стандартный шорткат — сохраняем его абсолютный путь
+                        if p.lower() in ("desktop", "downloads", "documents", "pictures", "music", "videos", "home"):
+                            self.file_cwd = Path.home() / p.capitalize() if p.lower() != "home" else Path.home()
+                        else:
+                            # Иначе склеиваем с текущей папкой и сохраняем только если путь существует
+                            base = self.file_cwd if self.file_cwd else Path.home()
+                            candidate = (base / p).resolve()
+                            if candidate.exists():
+                                self.file_cwd = candidate
 
             elif name == "send_message":
-                r = await loop.run_in_executor(None, lambda: send_message(parameters=args, response=None, player=self.ui, session_memory=None))
+                r = await self._run(lambda: send_message(parameters=args, response=None, player=self.ui, session_memory=None))
                 result = r or f"Message sent to {args.get('receiver')}."
 
             elif name == "reminder":
-                r = await loop.run_in_executor(None, lambda: reminder(parameters=args, response=None, player=self.ui))
+                r = await self._run(lambda: reminder(parameters=args, response=None, player=self.ui))
                 result = r or "Reminder set."
 
             elif name == "youtube_video":
-                r = await loop.run_in_executor(None, lambda: youtube_video(parameters=args, response=None, player=self.ui))
+                r = await self._run(lambda: youtube_video(parameters=args, response=None, player=self.ui))
                 result = r or "Done."
 
             elif name == "screen_process":
@@ -568,19 +609,19 @@ class JarvisLive:
                 result = "Vision module activated. Stay completely silent — vision module will speak directly."
 
             elif name == "computer_settings":
-                r = await loop.run_in_executor(None, lambda: computer_settings(parameters=args, response=None, player=self.ui))
+                r = await self._run(lambda: computer_settings(parameters=args, response=None, player=self.ui))
                 result = r or "Done."
 
             elif name == "desktop_control":
-                r = await loop.run_in_executor(None, lambda: desktop_control(parameters=args, player=self.ui))
+                r = await self._run(lambda: desktop_control(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "code_helper":
-                r = await loop.run_in_executor(None, lambda: code_helper(parameters=args, player=self.ui, speak=self.speak))
+                r = await self._run(lambda: code_helper(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
 
             elif name == "dev_agent":
-                r = await loop.run_in_executor(None, lambda: dev_agent(parameters=args, player=self.ui, speak=self.speak))
+                r = await self._run(lambda: dev_agent(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
 
             elif name == "agent_task":
@@ -591,19 +632,19 @@ class JarvisLive:
                 result   = f"Task started (ID: {task_id})."
 
             elif name == "web_search":
-                r = await loop.run_in_executor(None, lambda: web_search_action(parameters=args, player=self.ui))
+                r = await self._run(lambda: web_search_action(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "computer_control":
-                r = await loop.run_in_executor(None, lambda: computer_control(parameters=args, player=self.ui))
+                r = await self._run(lambda: computer_control(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "game_updater":
-                r = await loop.run_in_executor(None, lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
+                r = await self._run(lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
 
             elif name == "flight_finder":
-                r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))
+                r = await self._run(lambda: flight_finder(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "shutdown_jarvis":
@@ -669,12 +710,14 @@ class JarvisLive:
     async def _receive_audio(self):
         print("[JARVIS] 👂 Recv started")
         out_buf, in_buf = [], []
-
+        _got_response = False
+        
         try:
             while True:
                 async for response in self.session.receive():
 
                     if response.data:
+                        _got_response = True
                         if self._turn_done_event and self._turn_done_event.is_set():
                             self._turn_done_event.clear()
                         self.audio_in_queue.put_nowait(response.data)
@@ -685,6 +728,7 @@ class JarvisLive:
                         if sc.output_transcription and sc.output_transcription.text:
                             txt = _clean_transcript(sc.output_transcription.text)
                             if txt:
+                                _got_response = True
                                 out_buf.append(txt)
 
                         if sc.input_transcription and sc.input_transcription.text:
@@ -693,6 +737,11 @@ class JarvisLive:
                                 in_buf.append(txt)
 
                         if sc.turn_complete:
+                            if not _got_response and in_buf:
+                                # Пользователь что-то сказал, но ответа нет — safety block
+                                self.ui.write_log("SYS: Response blocked (safety filter).")
+                                self.speak("Sir, that response was blocked. Please try rephrasing.")
+                            _got_response = False  # сброс на следующий ход
                             if self._turn_done_event:
                                 self._turn_done_event.set()
 
@@ -717,9 +766,15 @@ class JarvisLive:
                         )
 
         except Exception as e:
-            print(f"[JARVIS] ❌ Recv: {e}")
-            traceback.print_exc()
-            raise
+            err = str(e)
+            if any(kw in err.upper() for kw in ("SAFETY", "BLOCKED", "RECITATION", "PROHIBITED")):
+                print(f"[JARVIS] 🚫 Safety exception: {err[:120]}")
+                self.ui.write_log("SYS: Safety block exception.")
+                self.speak("Sir, that response was blocked by safety filters.")
+            else:
+                print(f"[JARVIS] ❌ Recv: {e}")
+                traceback.print_exc()
+            raise  # reconnect в любом случае
 
     async def _play_audio(self):
         print("[JARVIS] 🔊 Play started")
@@ -750,6 +805,15 @@ class JarvisLive:
                     continue
 
                 self.set_speaking(True)
+                if self._interrupt_flag.is_set():
+                    self._interrupt_flag.clear()
+                    while not self.audio_in_queue.empty():
+                        try:
+                            self.audio_in_queue.get_nowait()
+                        except Exception:
+                            break
+                    self.set_speaking(False)
+                    continue
                 await asyncio.to_thread(stream.write, chunk)
 
         except Exception as e:
