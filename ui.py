@@ -1351,7 +1351,7 @@ class MainWindow(QMainWindow):
         lay.addStretch()
         lay.addWidget(_fl("FatihMakes Industries  ·  MARK XXXIX  ·  CLASSIFIED"))
         lay.addStretch()
-        lay.addWidget(_fl("© STARK INDUSTRIES", C.PRI_DIM))
+        lay.addWidget(_fl("© FATIHMAKES", C.PRI_DIM))
         return w
 
     def _on_file_selected(self, path: str):
