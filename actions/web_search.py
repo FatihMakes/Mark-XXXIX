@@ -1,3 +1,4 @@
+#web_search.py
 import json
 import sys
 from pathlib import Path
@@ -22,7 +23,7 @@ def _gemini_search(query: str) -> str:
 
     client   = genai.Client(api_key=_get_api_key())
     response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
+        model="gemini-2.5-flash",
         contents=query,
         config={"tools": [{"google_search": {}}]},
     )

@@ -147,17 +147,13 @@ def _desktop_send(app_name: str, receiver: str, message: str) -> str:
     time.sleep(0.2)
     pyautogui.press("enter")
     time.sleep(0.3)
-
     return f"Message sent to {receiver} via {app_name}."
-
 
 def _send_whatsapp(receiver: str, message: str) -> str:
     return _desktop_send("WhatsApp", receiver, message)
 
-
 def _send_telegram(receiver: str, message: str) -> str:
     return _desktop_send("Telegram", receiver, message)
-
 
 def _send_signal(receiver: str, message: str) -> str:
     return _desktop_send("Signal", receiver, message)

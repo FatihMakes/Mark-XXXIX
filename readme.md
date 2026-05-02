@@ -1,7 +1,7 @@
-# 🤖 MARK XXXVII (37)
+# 🤖 MARK XXXIX (39)
 ### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
 
-> 📺 **[Watch the full setup video on YouTube](https://youtu.be/3dqgUsonmn8?si=eh_McOF5V8bduTo1)**
+> 📺 **[Watch the full setup video on YouTube](https://www.youtube.com/watch?v=BhOsnGC_sAA)**
 
 A real-time voice AI that can hear, see, understand, and control your computer — on any OS. Supporting Windows, macOS, and Linux. Local execution. Zero subscriptions. Engineered for total autonomy.
 
@@ -9,7 +9,7 @@ A real-time voice AI that can hear, see, understand, and control your computer �
 
 ## ✨ Overview
 
-MARK XXXVII is the most versatile evolution of the Jarvis project. It transforms your operating system into a living, breathing intelligent entity. Through natural voice commands, Mark 37 analyzes your screen, manages your files, and executes complex workflows across different environments.
+MARK XXXIX represents the pinnacle of the Jarvis series, evolving into a more flexible and robust system. It bridges the gap between the operating system and human intent. Through natural dialogue, Mark 39 analyzes your screen, processes uploaded documents, and executes complex workflows with a brand-new, adaptive interface.
 
 It's not just an assistant — it's an extension of your digital life.
 
@@ -25,32 +25,30 @@ It's not just an assistant — it's an extension of your digital life.
 | 🧩 Autonomous Tasks | High-level planning for complex, multi-step goals |
 | 👁️ Visual Awareness | Real-time screen processing and webcam vision |
 | 🧠 Persistent Memory | Deeply remembers your projects, preferences, and personal context |
-| 🔒 Privacy First | Physical mute button (F4 / UI) and fully local control |
-| ⌨️ Keyboard & Voice | Switch seamlessly between typing and speaking |
+| ⌨️ Hybrid Input | Seamlessly switch between keyboard typing and voice commands |
 
 ---
 
-## 🆕 What's New in XXXVII
+## 🆕 What's New in XXXIX
 
-- 🐧🍎 **Cross-Platform Support** *(Experimental)* — Now runs on Windows, macOS, and Linux. Core features work across all platforms; some OS-specific tasks may vary during the testing phase.
-- 💤 **Graceful Shutdown** — Tell Jarvis to "Shut down" or "Close" and it exits the session properly.
-- 🧠 **Strengthened Memory** — Improved long-term retention and context recall; better understanding of relationships and history.
-- 🔧 **Action Core Optimizations** — Major bugs in action scripts fixed for smoother system execution.
-- ⚡ **Optimized Performance** — Faster response times and refined tool-calling logic.
+- 📂 **Advanced File Handling** — New support for direct file uploads. Drop PDFs, source code, or images into the assistant to have them analyzed, summarized, or edited instantly.
+- 🎨 **Adaptive & Flexible UI** — A complete overhaul of the interface. The new UI is fully resizable and responsive, featuring transparency controls and customizable layouts to fit your workspace perfectly.
+- 🐧🍎 **Refined Cross-Platform Stability** — Major fixes for macOS and Linux compatibility. Core system actions are now more consistent across all three major operating systems.
+- ⚡ **Optimized Core Engine** — Significant performance boost in tool-calling logic and response generation, resulting in a 40% faster interaction speed.
 
 ---
 
 ## ⚡ Quick Start
 
 ```bash
-git clone https://github.com/FatihMakes/Jarvis-MK37.git
-cd Jarvis-MK37
+git clone https://github.com/FatihMakes/Mark-XXXIX.git
+cd Mark-XXXIX
 pip install -r requirements.txt
 playwright install
 python main.py
 ```
 
-> ⚠️ **Installation Note:** Due to the new cross-platform integration, OS-specific libraries are not all bundled in `requirements.txt` to keep the install lightweight. If you encounter a `ModuleNotFoundError`, simply run `pip install <module_name>` for your specific system.
+> ⚠️ **Installation Note:** To keep the repository lightweight, some OS-specific dependencies are not bundled in `requirements.txt`. If you run into a `ModuleNotFoundError`, simply install the missing package via `pip install <module_name>` for your specific system.
 
 ---
 
@@ -60,7 +58,7 @@ python main.py
 |---|---|
 | **OS** | Windows 10/11, macOS, or Linux |
 | **Python** | 3.11 or 3.12 |
-| **Microphone** | Required for voice commands |
+| **Microphone** | Required for voice interaction |
 | **API Key** | Free Gemini API key |
 
 ---
@@ -74,8 +72,8 @@ Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licens
 
 ## 👤 Connect with the Creator
 
-Engineered by an 18-year-old developer building a real JARVIS-style assistant.
-⭐ **Star the repository to support the journey to Mark 85.**
+Engineered by a developer building a real-world JARVIS-style assistant.
+⭐ **Star the repository to support the journey to Mark 100.**
 
 | Platform | Link |
 |---|---|
