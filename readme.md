@@ -35,20 +35,61 @@ It's not just an assistant — it's an extension of your digital life.
 - 🎨 **Adaptive & Flexible UI** — A complete overhaul of the interface. The new UI is fully resizable and responsive, featuring transparency controls and customizable layouts to fit your workspace perfectly.
 - 🐧🍎 **Refined Cross-Platform Stability** — Major fixes for macOS and Linux compatibility. Core system actions are now more consistent across all three major operating systems.
 - ⚡ **Optimized Core Engine** — Significant performance boost in tool-calling logic and response generation, resulting in a 40% faster interaction speed.
+- 🔒 **Enhanced Security** — Environment variable support for API keys (.env files), improved platform compatibility, and better error handling.
 
 ---
 
 ## ⚡ Quick Start
 
+### Prerequisites
+- Python 3.11 or 3.12
+- Microphone for voice input
+- Free [Google Gemini API key](https://ai.google.dev/gemini-api/docs/api-key)
+
+### Installation
+
+1. **Clone the repository:**
 ```bash
 git clone https://github.com/FatihMakes/Mark-XXXIX.git
 cd Mark-XXXIX
+```
+
+2. **Install dependencies:**
+```bash
 pip install -r requirements.txt
 playwright install
+```
+
+3. **Set up your API key** (Choose one method):
+
+**Option A: Using .env file (Recommended - More Secure)**
+```bash
+# Create .env file in project root
+echo GOOGLE_API_KEY=your_gemini_api_key_here > .env
+```
+
+**Option B: Using GUI Setup**
+```bash
+python main.py
+# The GUI will prompt for your API key on first run
+```
+
+4. **Start MARK XXXIX:**
+```bash
 python main.py
 ```
 
-> ⚠️ **Installation Note:** To keep the repository lightweight, some OS-specific dependencies are not bundled in `requirements.txt`. If you run into a `ModuleNotFoundError`, simply install the missing package via `pip install <module_name>` for your specific system.
+---
+
+## 🔒 Security & Setup Guide
+
+**⚠️ Important:** For detailed security information, API key management, and platform-specific setup instructions, see **[SECURITY.md](SECURITY.md)**.
+
+Key highlights:
+- Use `.env` files for API key storage (recommended)
+- Never commit API keys or credentials to git
+- Accessible setup for users with screen readers
+- Cross-platform compatibility (Windows, macOS, Linux)
 
 ---
 
@@ -59,7 +100,22 @@ python main.py
 | **OS** | Windows 10/11, macOS, or Linux |
 | **Python** | 3.11 or 3.12 |
 | **Microphone** | Required for voice interaction |
-| **API Key** | Free Gemini API key |
+| **API Key** | [Free Google Gemini API key](https://ai.google.dev/gemini-api/docs/api-key) |
+
+---
+
+## 🔧 Troubleshooting
+
+### Installation Issues
+
+**Q: "ModuleNotFoundError" on macOS or Linux?**  
+A: This is expected for Windows-only packages. The app gracefully skips them. See [SECURITY.md](SECURITY.md) for platform-specific guidance.
+
+**Q: "GOOGLE_API_KEY not found"?**  
+A: Create a `.env` file with your API key. See **[SECURITY.md](SECURITY.md)** for detailed instructions.
+
+**Q: Audio issues?**  
+A: Check [SECURITY.md](SECURITY.md) for platform-specific audio setup.
 
 ---
 
@@ -79,3 +135,15 @@ Engineered by a developer building a real-world JARVIS-style assistant.
 |---|---|
 | YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
 | Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |
+
+---
+
+## 🤝 Contributing
+
+Found an issue? Want to help improve MARK XXXIX? Check out the [open issues](https://github.com/FatihMakes/Mark-XXXIX/issues) and feel free to submit pull requests!
+
+Current focus areas:
+- Cross-platform stability
+- Security hardening
+- Accessibility improvements
+- Performance optimization
